@@ -1,8 +1,21 @@
 # ============================================================
 # Flask-приложение: онлайн-компилятор
-# Защита: rate-limit по IP, детект смены имени, чёрный список,
-# очереди на C#/Python, sandbox, логирование подозрительных IP,
-# разблокировка IP и имён для учителя.
+#
+# Защита:
+#   - rate-limit по IP (главный) и по имени (вспомогательный)
+#   - детект смены имени с одного IP
+#   - чёрный список команд
+#   - очереди на C# / Python
+#   - sandbox для Python (в executor.py)
+#   - логирование подозрительных IP
+#   - разблокировка IP и имён для учителя
+#
+# Сессия:
+#   - секретный ключ из файла .secret_key (стабилен между воркерами)
+#   - cookie HttpOnly, SameSite=Lax, время жизни 8 часов
+#
+# Логи:
+#   - отключены (werkzeug, flask, gunicorn)
 # ============================================================
 import csv
 import io
@@ -47,12 +60,72 @@ from security import (
 )
 
 
+# ============================================================
+# Константы
+# ============================================================
 HERE = Path(__file__).parent
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "teacher2026")
 
+
+# ============================================================
+# Отключаем логи (werkzeug / flask) ещё до создания app
+# ============================================================
+import logging
+
+logging.getLogger("werkzeug").disabled = True
+logging.getLogger("flask.app").disabled = True
+logging.getLogger("flask").disabled = True
+
+
+# ============================================================
+# Секретный ключ — ОДИН и тот же для всех воркеров gunicorn
+# ============================================================
+def _load_secret_key() -> str:
+    """Загружает или создаёт .secret_key. Стабилен между перезапусками."""
+    # 1. Из переменной окружения
+    env = os.environ.get("SECRET_KEY")
+    if env:
+        return env
+
+    # 2. Из файла рядом с проектом
+    key_file = HERE / ".secret_key"
+    if key_file.exists():
+        try:
+            k = key_file.read_text(encoding="utf-8").strip()
+            if k:
+                return k
+        except Exception:
+            pass
+
+    # 3. Генерируем и сохраняем навсегда
+    k = secrets.token_hex(32)
+    try:
+        key_file.write_text(k, encoding="utf-8")
+        try:
+            os.chmod(key_file, 0o600)
+        except Exception:
+            pass
+    except Exception as e:
+        print(f"[!] Не удалось сохранить .secret_key: {e}")
+    return k
+
+
+# ============================================================
+# Создание приложения
+# ============================================================
 app = Flask(__name__, static_folder=None)
-app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(16))
-app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_SIZE
+app.secret_key = _load_secret_key()
+
+app.config.update(
+    MAX_CONTENT_LENGTH=MAX_REQUEST_SIZE,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=False,
+    PERMANENT_SESSION_LIFETIME=8 * 3600,   # 8 часов
+)
+
+# Отключаем логгер самого приложения
+app.logger.disabled = True
 
 
 # ============================================================
@@ -121,6 +194,7 @@ def admin_login():
     error = None
     if request.method == "POST":
         if request.form.get("password") == ADMIN_PASSWORD:
+            session.permanent = True
             session["admin"] = True
             return redirect("/admin")
         error = "Неверный пароль"
@@ -228,7 +302,6 @@ def api_run():
     if not check_rate_limit(f"ip:{ip}", RATE_IP_MAX, RATE_IP_WINDOW):
         log_suspicious_ip(ip, student,
                           f"rate_limit_ip ({RATE_IP_MAX}/{RATE_IP_WINDOW}s)", code)
-        print(f"[RATE-IP] {ip} · {student} — превышен лимит IP")
         return jsonify({
             "error": f"⏱ Слишком много запросов с вашего IP. "
                      f"Не более {RATE_IP_MAX} в минуту. Подождите.",
@@ -241,7 +314,6 @@ def api_run():
         log_suspicious_ip(ip, student,
                           f"rate_limit_name ({RATE_STUDENT_MAX}/{RATE_STUDENT_WINDOW}s)",
                           code)
-        print(f"[RATE-NAME] {ip} · {student} — превышен лимит имени")
         return jsonify({
             "error": f"⏱ Слишком много запусков от имени «{student}». "
                      f"Не более {RATE_STUDENT_MAX} в минуту.",
@@ -252,7 +324,6 @@ def api_run():
     ok, err = check_name_change(ip, student)
     if not ok:
         log_suspicious_ip(ip, student, "name_change_block", code)
-        print(f"[NAME-CHANGE] {ip} · {student} — блок")
         return jsonify({"error": err, "tests": []}), 429
 
     # ---------- 5. Строгий режим (если STRICT_NAMES=1) ----------
@@ -270,14 +341,12 @@ def api_run():
     danger = check_blacklist(code)
     if danger:
         log_suspicious_ip(ip, student, f"blacklist: {danger[:60]}", code)
-        print(f"[BLACKLIST] {ip} · {student} · {danger[:60]}")
         return jsonify({"error": danger, "tests": []}), 400
 
     # Логируем подозрительное, но не блокируем
     sus = log_suspicious_code(code)
     if sus:
         log_suspicious_ip(ip, student, f"suspicious_code: {sus}", code)
-        print(f"[SUSPICIOUS] {ip} · {student} · {sus}")
 
     # ---------- 8. Проверка задачи ----------
     task = next((t for t in TASKS if t["id"] == task_id), None)
@@ -293,7 +362,6 @@ def api_run():
                 "error": "⏱ Очередь на C# переполнена. Попробуйте через минуту.",
                 "tests": []
             }), 503
-        print(f"[RUN-CS] {ip} · {student!r} · {task_id!r} (очередь #{position})")
         try:
             result = run_code(code, task, language, custom_tests=custom_tests)
         finally:
@@ -307,7 +375,6 @@ def api_run():
                 "error": "⏱ Очередь на Python переполнена. Попробуйте через минуту.",
                 "tests": []
             }), 503
-        print(f"[RUN-PY] {ip} · {student!r} · {task_id!r} (очередь #{position})")
         try:
             result = run_code(code, task, language, custom_tests=custom_tests)
         finally:
@@ -362,7 +429,6 @@ def api_delete_submission():
     if not (student and task_id and language):
         return jsonify({"error": "Не указаны параметры"}), 400
     delete_submission(student, task_id, language)
-    print(f"[DEL]  {student} · {task_id} · {language}")
     return jsonify({"ok": True})
 
 
@@ -402,7 +468,6 @@ def api_save_grade():
     except (ValueError, TypeError):
         grade = None
     save_grade(student, task_id, grade=grade, comment=comment, teacher=teacher)
-    print(f"[GRADE] {student} · {task_id} · {grade}")
     return jsonify({"ok": True})
 
 
@@ -442,7 +507,6 @@ def api_suspicious():
 def api_clear_suspicious():
     """Полная очистка списка (но БЕЗ снятия блокировок)."""
     clear_suspicious()
-    print("[SUSPICIOUS] очищен список")
     return jsonify({"ok": True})
 
 
@@ -455,8 +519,6 @@ def api_unblock_ip():
     if not ip:
         return jsonify({"error": "Не указан IP"}), 400
     result = unblock_ip(ip)
-    print(f"[UNBLOCK] {ip} — снято: rate={result['cleared_rate']}, "
-          f"names={result['cleared_name']}, susp={result['cleared_suspicious']}")
     return jsonify({"ok": True, "result": result})
 
 
@@ -469,7 +531,6 @@ def api_unblock_name():
     if not student:
         return jsonify({"error": "Не указано имя"}), 400
     result = unblock_name(student)
-    print(f"[UNBLOCK-NAME] {student} — снято: {result['cleared']}")
     return jsonify({"ok": True, "result": result})
 
 
@@ -545,7 +606,6 @@ def too_large(e):
 
 @app.errorhandler(500)
 def err500(e):
-    traceback.print_exc()
     return jsonify({"error": str(e)}), 500
 
 
@@ -584,7 +644,7 @@ if __name__ == "__main__":
     print(f"📚 Задач:    {len(TASKS)}")
     print(f"🛡  Защита:")
     print(f"     - IP-лимит:      {RATE_IP_MAX}/{RATE_IP_WINDOW}с (главный)")
-    print(f"     - Имя-лимит:     {RATE_STUDENT_MAX}/{RATE_STUDENT_WINDOW}с (вспом.)")
+    print(f"     - Имя-лимит:     {RATE_STUDENT_MAX}/{RATE_STUDENT_WINDOW}с")
     print(f"     - Мин. интервал: 2 сек")
     print(f"     - Макс. код:     {MAX_CODE_SIZE:,} байт")
     print(f"     - Макс. запрос:  {MAX_REQUEST_SIZE:,} байт")
