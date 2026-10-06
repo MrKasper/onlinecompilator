@@ -1,0 +1,613 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Панель учителя — Онлайн компилятор</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #f5f6f8; color: #2c3e50; min-height: 100vh; font-size: 13px;
+  }
+  .header {
+    height: 52px; background: #fff; border-bottom: 1px solid #e1e4e8;
+    display: flex; align-items: center; padding: 0 20px; gap: 12px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .logo { font-weight: 700; color: #1a202c; font-size: 15px; }
+  .badge {
+    background: #2563eb; color: #fff; font-size: 11px;
+    padding: 3px 10px; border-radius: 12px; font-weight: 600;
+  }
+  .header nav { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+  .header nav button {
+    padding: 7px 16px; border: 1px solid #d1d5db; background: #fff;
+    color: #4b5563; border-radius: 6px; cursor: pointer;
+    font-family: inherit; font-size: 12.5px; font-weight: 600;
+  }
+  .header nav button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .header nav button:hover:not(.active) { border-color: #9ca3af; }
+  .header nav a {
+    padding: 7px 16px; color: #2563eb; text-decoration: none;
+    font-size: 12.5px; font-weight: 600;
+  }
+  .header nav a.logout { color: #dc2626; }
+
+  .container { padding: 24px; max-width: 1500px; margin: 0 auto; }
+
+  .controls {
+    display: flex; gap: 10px; flex-wrap: wrap;
+    margin-bottom: 18px; align-items: center;
+    background: #fff; padding: 14px 16px; border-radius: 8px;
+    border: 1px solid #e1e4e8;
+  }
+  .controls input, .controls select {
+    padding: 8px 14px; border-radius: 6px; border: 1px solid #d1d5db;
+    background: #fff; color: #1a202c; font-family: inherit; font-size: 12.5px;
+  }
+  .controls input:focus, .controls select:focus {
+    outline: none; border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
+  }
+  .controls .btn {
+    padding: 8px 16px; border: none; border-radius: 6px; cursor: pointer;
+    background: #2563eb; color: #fff; font-family: inherit; font-size: 12.5px;
+    font-weight: 600; text-decoration: none; display: inline-flex; align-items: center;
+  }
+  .controls .btn:hover { background: #1d4ed8; }
+  .controls .btn.secondary {
+    background: #fff; color: #4b5563; border: 1px solid #d1d5db;
+  }
+  .controls .btn.secondary:hover { color: #1f2937; border-color: #9ca3af; background: #f9fafb; }
+  .controls .btn.success { background: #10b981; }
+  .controls .btn.success:hover { background: #059669; }
+  .controls .stats { margin-left: auto; color: #6b7280; font-size: 12.5px; }
+  .controls .stats b { color: #059669; }
+
+  table {
+    width: 100%; border-collapse: collapse; background: #fff;
+    border-radius: 8px; overflow: hidden; border: 1px solid #e1e4e8;
+  }
+  th, td { padding: 12px 16px; text-align: left; border-bottom: 1px solid #f3f4f6; font-size: 12.5px; }
+  th {
+    background: #f9fafb; color: #4b5563; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.5px; font-size: 11px;
+  }
+  tbody tr:hover td { background: #f9fafb; }
+  td.student { font-weight: 600; color: #111827; }
+  td.group { color: #6b7280; font-size: 11.5px; }
+  td.task { color: #4b5563; }
+  td.lang { font-family: monospace; color: #6b7280; font-weight: 500; }
+  td.score { font-family: monospace; font-weight: 700; }
+  td.score.ok { color: #059669; }
+  td.score.partial { color: #d97706; }
+  td.score.bad { color: #dc2626; }
+  td.time { color: #9ca3af; font-size: 11.5px; }
+  td.actions { text-align: right; white-space: nowrap; }
+
+  .pill { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; }
+  .pill.ok { background: #d1fae5; color: #065f46; }
+  .pill.partial { background: #fef3c7; color: #92400e; }
+  .pill.bad { background: #fee2e2; color: #991b1b; }
+  .pill.grade { background: #dbeafe; color: #1e40af; }
+  .pill.auto { background: #ede9fe; color: #5b21b6; }
+
+  .btn-view, .btn-del {
+    padding: 5px 12px; font-size: 11.5px; border-radius: 5px;
+    background: #fff; color: #2563eb; border: 1px solid #bfdbfe;
+    cursor: pointer; font-family: inherit; font-weight: 500;
+    margin-left: 4px;
+  }
+  .btn-view:hover { background: #eff6ff; border-color: #2563eb; }
+  .btn-del { color: #dc2626; border-color: #fecaca; }
+  .btn-del:hover { background: #fef2f2; border-color: #dc2626; }
+
+  .empty { text-align: center; padding: 60px 20px; color: #9ca3af; }
+
+  /* Статистика */
+  .stats-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+    gap: 14px;
+  }
+  .stat-card {
+    background: #fff; border-radius: 10px; padding: 18px;
+    border: 1px solid #e1e4e8; transition: box-shadow 0.15s;
+  }
+  .stat-card:hover { box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+  .stat-card h4 { color: #111827; font-size: 14px; margin-bottom: 4px; font-weight: 700; }
+  .stat-card .group-label { color: #9ca3af; font-size: 11.5px; margin-bottom: 12px; }
+  .stat-row { display: flex; justify-content: space-between; padding: 5px 0; font-size: 12.5px; }
+  .stat-row span:first-child { color: #6b7280; }
+  .stat-row span:last-child { color: #1f2937; font-weight: 600; font-family: monospace; }
+  .stat-row .ok { color: #059669; }
+  .stat-row .warn { color: #d97706; }
+
+  /* Модалка */
+  .modal-bg {
+    position: fixed; inset: 0; background: rgba(15,23,42,0.55);
+    display: none; align-items: center; justify-content: center; z-index: 100;
+    backdrop-filter: blur(2px);
+  }
+  .modal-bg.show { display: flex; }
+  .modal {
+    background: #fff; border-radius: 10px; max-width: 950px; width: 92%;
+    max-height: 88vh; display: flex; flex-direction: column;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+  }
+  .modal-header {
+    padding: 18px 24px; border-bottom: 1px solid #e1e4e8;
+    display: flex; align-items: center;
+  }
+  .modal-header h3 { color: #111827; font-size: 15px; font-weight: 700; }
+  .modal-header .close {
+    margin-left: auto; background: transparent; border: none;
+    color: #9ca3af; font-size: 24px; cursor: pointer; line-height: 1;
+  }
+  .modal-header .close:hover { color: #1f2937; }
+  .modal-body { padding: 18px 24px; overflow: auto; }
+  .modal-body pre {
+    background: #f9fafb; padding: 16px; border-radius: 8px;
+    font-family: 'Consolas', monospace; font-size: 12.5px;
+    color: #1f2937; white-space: pre-wrap; word-break: break-word;
+    border: 1px solid #e5e7eb; line-height: 1.6; margin: 0;
+  }
+  .modal-meta { color: #6b7280; font-size: 12.5px; margin-bottom: 14px; }
+  .modal-meta b { color: #1f2937; }
+  .modal-tests { margin-top: 16px; }
+  .modal-tests div { padding: 4px 0; font-size: 12.5px; }
+  .modal-tests .ok { color: #059669; }
+  .modal-tests .fail { color: #dc2626; }
+
+  .grade-box {
+    margin-top: 20px; padding: 16px; background: #f9fafb;
+    border-radius: 8px; border: 1px solid #e1e4e8;
+  }
+  .grade-box h4 { color: #111827; margin-bottom: 12px; font-size: 13px; }
+  .grade-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .grade-row select, .grade-row input, .grade-row textarea {
+    padding: 8px 12px; border-radius: 6px; border: 1px solid #d1d5db;
+    font-family: inherit; font-size: 12.5px; color: #1f2937;
+  }
+  .grade-row textarea { flex: 1; resize: vertical; min-height: 38px; min-width: 200px; }
+  .grade-row select:focus, .grade-row input:focus, .grade-row textarea:focus {
+    outline: none; border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
+  }
+  .btn-save-grade {
+    padding: 8px 20px; background: #10b981; color: #fff; border: none;
+    border-radius: 6px; cursor: pointer; font-family: inherit; font-weight: 600;
+    font-size: 12.5px;
+  }
+  .btn-save-grade:hover { background: #059669; }
+  .btn-del-grade {
+    padding: 8px 16px; background: #fff; color: #dc2626;
+    border: 1px solid #fecaca; border-radius: 6px; cursor: pointer;
+    font-family: inherit; font-weight: 600; font-size: 12.5px;
+  }
+  .btn-del-grade:hover { background: #fef2f2; }
+  .grade-saved { color: #059669; font-size: 12px; margin-left: 8px; font-weight: 600; }
+
+  .attempt {
+    padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px;
+    margin-bottom: 10px; background: #fafbfc;
+  }
+  .attempt-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .attempt-head .score { font-weight: 700; font-family: monospace; font-size: 13px; }
+  .attempt-head .time { color: #9ca3af; font-size: 11.5px; margin-left: auto; }
+  .attempt pre {
+    background: #fff; padding: 10px; border-radius: 6px;
+    font-size: 12px; border: 1px solid #e5e7eb; overflow-x: auto;
+    color: #1f2937; max-height: 180px; margin: 0;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">👨‍🏫 Панель учителя</div>
+  <span class="badge">Онлайн компилятор</span>
+  <nav>
+    <button id="tabBtnSolutions" class="active" onclick="switchTab('solutions')">📋 Решения</button>
+    <button id="tabBtnStats" onclick="switchTab('stats')">📊 Статистика</button>
+    <a href="/">← К компилятору</a>
+    <a href="/admin/logout" class="logout">Выйти</a>
+  </nav>
+</div>
+
+<div class="container">
+
+  <div id="tabSolutions">
+    <div class="controls">
+      <input id="searchStudent" type="text" placeholder="Поиск по имени...">
+      <select id="filterStudent"><option value="">Все студенты</option></select>
+      <select id="filterGroup"><option value="">Все группы</option></select>
+      <select id="filterTask"><option value="">Все задачи</option></select>
+      <select id="filterLang">
+        <option value="">Все языки</option>
+        <option value="python">Python</option>
+        <option value="csharp">C#</option>
+      </select>
+      <select id="filterStatus">
+        <option value="">Все статусы</option>
+        <option value="ok">Только решённые</option>
+        <option value="partial">Только частично</option>
+        <option value="graded">Только с оценкой</option>
+      </select>
+      <button class="btn secondary" onclick="reload()">↻ Обновить</button>
+      <button class="btn secondary" onclick="doBackup()">💾 Резервная копия</button>
+      <a class="btn" href="/api/export.csv" download>⬇ Экспорт CSV</a>
+      <span class="stats" id="stats"></span>
+    </div>
+    <div id="tableWrap"><div class="empty">Загрузка...</div></div>
+  </div>
+
+  <div id="tabStats" style="display:none">
+    <div class="controls">
+      <button class="btn secondary" onclick="loadStats()">↻ Обновить</button>
+    </div>
+    <div id="statsWrap" class="stats-grid">
+      <div class="empty">Загрузка...</div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="modalBg" onclick="closeModal(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3 id="modalTitle">Решение</h3>
+      <button class="close" onclick="closeModal()">×</button>
+    </div>
+    <div class="modal-body" id="modalBody"></div>
+  </div>
+</div>
+
+<script>
+  let items = [];
+  let gradesMap = {};
+  let taskTitles = {};
+  let currentModalItem = null;
+
+  async function loadRefs() {
+    try {
+      const [tasks, grades, submissions] = await Promise.all([
+        fetch('/api/tasks').then(r => r.json()),
+        fetch('/api/grades').then(r => r.json()),
+        fetch('/api/submissions').then(r => r.json()),
+      ]);
+      tasks.forEach(t => { taskTitles[t.id] = t.title; });
+      const sel = document.getElementById('filterTask');
+      tasks.forEach(t => {
+        const opt = document.createElement('option');
+        opt.value = t.id; opt.textContent = t.title;
+        sel.appendChild(opt);
+      });
+
+      // Собрать студентов и группы из submissions
+      const students = new Set();
+      const groups = new Set();
+      submissions.forEach(s => {
+        if (s.student) students.add(s.student);
+        if (s.group_name) groups.add(s.group_name);
+      });
+      const ssel = document.getElementById('filterStudent');
+      [...students].sort().forEach(n => {
+        const opt = document.createElement('option');
+        opt.value = n; opt.textContent = n;
+        ssel.appendChild(opt);
+      });
+      const gsel = document.getElementById('filterGroup');
+      [...groups].sort().forEach(n => {
+        const opt = document.createElement('option');
+        opt.value = n; opt.textContent = n;
+        gsel.appendChild(opt);
+      });
+
+      grades.forEach(g => gradesMap[g.student + '::' + g.task_id] = g);
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  async function reload() {
+    try {
+      const res = await fetch('/api/submissions');
+      items = await res.json();
+      render();
+    } catch (e) {
+      document.getElementById('tableWrap').innerHTML =
+        '<div class="empty" style="color:#dc2626">Ошибка загрузки: ' + e.message + '</div>';
+    }
+  }
+
+  function getFiltered() {
+    const q = document.getElementById('searchStudent').value.trim().toLowerCase();
+    const fs = document.getElementById('filterStudent').value;
+    const fg = document.getElementById('filterGroup').value;
+    const ft = document.getElementById('filterTask').value;
+    const fl = document.getElementById('filterLang').value;
+    const fst = document.getElementById('filterStatus').value;
+
+    return items.filter(it => {
+      if (q && !(it.student || '').toLowerCase().includes(q)) return false;
+      if (fs && it.student !== fs) return false;
+      if (fg && it.group_name !== fg) return false;
+      if (ft && it.task_id !== ft) return false;
+      if (fl && it.language !== fl) return false;
+      const g = gradesMap[it.student + '::' + it.task_id];
+      if (fst === 'ok' && it.passed !== it.total) return false;
+      if (fst === 'partial' && it.passed === it.total) return false;
+      if (fst === 'graded') {
+        const val = g && (g.grade != null || g.auto_grade != null);
+        if (!val) return false;
+      }
+      return true;
+    }).sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
+  }
+
+  function render() {
+    const filtered = getFiltered();
+    const wrap = document.getElementById('tableWrap');
+    const totalOk = items.filter(i => i.passed === i.total).length;
+    document.getElementById('stats').innerHTML =
+      `Всего: <b>${items.length}</b> · решённых: <b>${totalOk}</b> · показано: <b>${filtered.length}</b>`;
+
+    if (!filtered.length) {
+      wrap.innerHTML = '<div class="empty">Нет сохранённых решений</div>';
+      return;
+    }
+
+    const rows = filtered.map((it, idx) => {
+      const ok = it.passed === it.total;
+      const cls = ok ? 'ok' : (it.passed > 0 ? 'partial' : 'bad');
+      const label = ok ? 'решено' : (it.passed > 0 ? 'частично' : 'не решено');
+      const g = gradesMap[it.student + '::' + it.task_id];
+      let gradeHtml = '';
+      if (g) {
+        if (g.grade != null) {
+          gradeHtml = '<span class="pill grade">🎓 ' + g.grade + '</span>';
+        } else if (g.auto_grade != null) {
+          gradeHtml = '<span class="pill auto">🤖 ' + g.auto_grade + '</span>';
+        }
+      }
+      return `
+        <tr>
+          <td class="student">${esc(it.student || '—')}</td>
+          <td class="group">${esc(it.group_name || '—')}</td>
+          <td class="task">${esc(taskTitles[it.task_id] || it.task_id)}</td>
+          <td class="lang">${it.language === 'csharp' ? 'C#' : 'Python'}</td>
+          <td class="score ${cls}">${it.passed} / ${it.total}</td>
+          <td><span class="pill ${cls}">${label}</span> ${gradeHtml}</td>
+          <td class="time">${esc(it.timestamp || '')}</td>
+          <td class="actions">
+            <button class="btn-view" onclick="showCode(${idx})">Показать</button>
+            <button class="btn-del" onclick="deleteEntry(${idx})">🗑</button>
+          </td>
+        </tr>`;
+    }).join('');
+
+    wrap.innerHTML = `
+      <table>
+        <thead>
+          <tr>
+            <th>Студент</th><th>Группа</th><th>Задача</th><th>Язык</th>
+            <th>Результат</th><th>Статус</th><th>Время</th><th></th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+    wrap._filtered = filtered;
+  }
+
+  async function deleteEntry(idx) {
+    const filtered = document.getElementById('tableWrap')._filtered || [];
+    const it = filtered[idx];
+    if (!it) return;
+    const taskTitle = taskTitles[it.task_id] || it.task_id;
+    if (!confirm('Удалить решение?\n\nСтудент: ' + it.student +
+                 '\nЗадача: ' + taskTitle +
+                 '\nЯзык: ' + (it.language === 'csharp' ? 'C#' : 'Python'))) return;
+    try {
+      const res = await fetch('/api/submissions', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          student: it.student, task_id: it.task_id, language: it.language
+        })
+      }).then(r => r.json());
+      if (res.ok) { reload(); }
+      else { alert(res.error || 'Ошибка удаления'); }
+    } catch (e) { alert('Ошибка: ' + e.message); }
+  }
+
+  function showCode(idx) {
+    const filtered = document.getElementById('tableWrap')._filtered || [];
+    const it = filtered[idx];
+    if (!it) return;
+    currentModalItem = it;
+
+    document.getElementById('modalTitle').textContent =
+      `${it.student} · ${taskTitles[it.task_id] || it.task_id}`;
+
+    const testsHtml = (it.tests || []).map(t =>
+      `<div class="${t.passed ? 'ok' : 'fail'}">${t.passed ? '✓' : '✕'} ${esc(t.name)}</div>`
+    ).join('');
+
+    const g = gradesMap[it.student + '::' + it.task_id] || {};
+    const gradeOptions = ['', '2', '3', '4', '5'].map(v =>
+      `<option value="${v}" ${String(g.grade || '') === v ? 'selected' : ''}>${v || '—'}</option>`
+    ).join('');
+
+    const autoHtml = g.auto_grade != null
+      ? `<span style="color:#5b21b6;font-size:12px;margin-left:8px">🤖 автооценка: ${g.auto_grade}</span>`
+      : '';
+
+    document.getElementById('modalBody').innerHTML = `
+      <div class="modal-meta">
+        Язык: <b>${it.language === 'csharp' ? 'C#' : 'Python'}</b> ·
+        Группа: <b>${esc(it.group_name || '—')}</b> ·
+        Результат: <b>${it.passed} / ${it.total}</b> ·
+        Время: <b>${esc(it.timestamp)}</b>
+      </div>
+      <pre>${esc(it.code || '')}</pre>
+      <div class="modal-tests">${testsHtml}</div>
+
+      <div class="grade-box">
+        <h4>🎓 Оценка от учителя ${autoHtml}</h4>
+        <div class="grade-row">
+          <select id="gradeSelect">${gradeOptions}</select>
+          <input id="gradeComment" type="text" placeholder="Комментарий..." 
+                 value="${esc(g.comment || '')}">
+          <button class="btn-save-grade" onclick="saveGrade()">Сохранить</button>
+          <button class="btn-del-grade" onclick="removeGrade()">Сбросить</button>
+          <span class="grade-saved" id="gradeSaved"></span>
+        </div>
+      </div>
+    `;
+    document.getElementById('modalBg').classList.add('show');
+  }
+
+  async function saveGrade() {
+    const it = currentModalItem;
+    if (!it) return;
+    const grade = document.getElementById('gradeSelect').value;
+    const comment = document.getElementById('gradeComment').value;
+
+    try {
+      const res = await fetch('/api/grade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          student: it.student,
+          task_id: it.task_id,
+          grade: grade === '' ? null : grade,
+          comment: comment,
+        })
+      }).then(r => r.json());
+
+      if (res.ok) {
+        await refreshGrades();
+        const key = it.student + '::' + it.task_id;
+        document.getElementById('gradeSaved').textContent = '✓ Сохранено';
+        setTimeout(() => {
+          const el = document.getElementById('gradeSaved');
+          if (el) el.textContent = '';
+        }, 2500);
+        render();
+      } else {
+        alert(res.error || 'Ошибка сохранения');
+      }
+    } catch (e) {
+      alert('Ошибка: ' + e.message);
+    }
+  }
+
+  async function removeGrade() {
+    const it = currentModalItem;
+    if (!it) return;
+    if (!confirm('Сбросить оценку по этой задаче?')) return;
+    try {
+      await fetch('/api/grade', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ student: it.student, task_id: it.task_id })
+      });
+      await refreshGrades();
+      document.getElementById('gradeSaved').textContent = '✓ Сброшено';
+      setTimeout(() => {
+        const el = document.getElementById('gradeSaved');
+        if (el) el.textContent = '';
+      }, 2500);
+      render();
+    } catch (e) { alert(e.message); }
+  }
+
+  async function refreshGrades() {
+    const gr = await fetch('/api/grades').then(r => r.json());
+    gradesMap = {};
+    gr.forEach(g => gradesMap[g.student + '::' + g.task_id] = g);
+  }
+
+  function closeModal(e) {
+    document.getElementById('modalBg').classList.remove('show');
+    currentModalItem = null;
+  }
+
+  async function doBackup() {
+    try {
+      const r = await fetch('/api/backup', {method: 'POST'}).then(x => x.json());
+      alert(r.ok ? 'Копия сохранена:\n' + r.path : (r.error || 'Ошибка'));
+    } catch (e) { alert(e.message); }
+  }
+
+  // ---------- Статистика ----------
+  async function loadStats() {
+    try {
+      const stats = await fetch('/api/stats').then(r => r.json());
+      const wrap = document.getElementById('statsWrap');
+      const names = Object.keys(stats).sort((a, b) => stats[b].solved - stats[a].solved);
+      if (!names.length) {
+        wrap.innerHTML = '<div class="empty">Пока нет данных</div>';
+        return;
+      }
+
+      // группы по студентам
+      const groupsByStudent = {};
+      items.forEach(it => {
+        if (it.student && it.group_name && !groupsByStudent[it.student]) {
+          groupsByStudent[it.student] = it.group_name;
+        }
+      });
+
+      wrap.innerHTML = names.map(name => {
+        const st = stats[name];
+        const gr = groupsByStudent[name] || '';
+        return '<div class="stat-card">' +
+          '<h4>' + esc(name) + '</h4>' +
+          (gr ? '<div class="group-label">Группа: ' + esc(gr) + '</div>' : '') +
+          '<div class="stat-row"><span>Решено задач</span><span class="ok">' + st.solved + '</span></div>' +
+          '<div class="stat-row"><span>Всего попыток</span><span>' + st.attempts + '</span></div>' +
+          '<div class="stat-row"><span>Python / C#</span><span>' +
+            (st.by_lang.python || 0) + ' / ' + (st.by_lang.csharp || 0) + '</span></div>' +
+          '<div class="stat-row"><span>Средняя оценка</span><span class="' +
+            (st.avg_grade >= 4 ? 'ok' : (st.avg_grade ? 'warn' : '')) + '">' +
+            (st.avg_grade != null ? st.avg_grade : '—') + '</span></div>' +
+          '<div class="stat-row"><span>Эффективность</span><span>' +
+            (st.attempts ? Math.round(st.solved / st.attempts * 100) + '%' : '—') +
+          '</span></div>' +
+        '</div>';
+      }).join('');
+    } catch (e) {
+      document.getElementById('statsWrap').innerHTML =
+        '<div class="empty" style="color:#dc2626">Ошибка: ' + e.message + '</div>';
+    }
+  }
+
+  function switchTab(name) {
+    document.getElementById('tabBtnSolutions').classList.toggle('active', name === 'solutions');
+    document.getElementById('tabBtnStats').classList.toggle('active', name === 'stats');
+    document.getElementById('tabSolutions').style.display = name === 'solutions' ? '' : 'none';
+    document.getElementById('tabStats').style.display = name === 'stats' ? '' : 'none';
+    if (name === 'stats') loadStats();
+  }
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g,
+      c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+
+  ['searchStudent', 'filterStudent', 'filterGroup', 'filterTask', 'filterLang', 'filterStatus']
+    .forEach(id => {
+      document.getElementById(id).addEventListener('input', render);
+      document.getElementById(id).addEventListener('change', render);
+    });
+
+  setInterval(() => {
+    if (document.getElementById('tabSolutions').style.display !== 'none') {
+      reload();
+    }
+  }, 10000);
+
+  loadRefs().then(reload);
+</script>
+</body>
+</html>

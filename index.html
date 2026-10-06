@@ -1,0 +1,828 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Онлайн компилятор</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: #f5f6f8; color: #2c3e50; height: 100vh;
+    display: flex; flex-direction: column; overflow: hidden; font-size: 13px;
+  }
+  .header {
+    height: 56px; background: #fff; border-bottom: 1px solid #e1e4e8;
+    display: flex; align-items: center; padding: 0 20px; gap: 10px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  }
+  .logo { font-weight: 700; color: #1a202c; font-size: 15px; }
+  .badge {
+    background: #2563eb; color: #fff; font-size: 11px;
+    padding: 3px 10px; border-radius: 12px; font-weight: 600;
+  }
+  .header input {
+    padding: 7px 14px; border-radius: 6px;
+    border: 1px solid #d1d5db; background: #fff; color: #1a202c;
+    font-size: 13px; font-family: inherit;
+    transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .header input:focus {
+    outline: none; border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
+  }
+  .header input#studentName { width: 200px; }
+  .header input#studentGroup { width: 140px; }
+  .header input.saved { border-color: #10b981; }
+  .header-status {
+    color: #6b7280; margin-left: auto; font-size: 12.5px; font-weight: 500;
+  }
+
+  .layout { display: grid; grid-template-columns: 320px 1fr; flex: 1; overflow: hidden; }
+
+  .sidebar {
+    background: #fff; border-right: 1px solid #e1e4e8;
+    display: flex; flex-direction: column; overflow: hidden;
+  }
+  .lang-tabs { display: flex; background: #f9fafb; border-bottom: 1px solid #e1e4e8; }
+  .lang-tab {
+    flex: 1; padding: 13px 10px; text-align: center; font-size: 12.5px;
+    cursor: pointer; color: #6b7280; border-bottom: 2px solid transparent;
+    transition: all 0.15s; user-select: none; font-weight: 500;
+  }
+  .lang-tab:hover { color: #1a202c; background: #f3f4f6; }
+  .lang-tab.active { color: #2563eb; border-bottom-color: #2563eb; background: #fff; font-weight: 600; }
+
+  .tag-filter {
+    padding: 8px 12px; border-bottom: 1px solid #e1e4e8;
+    display: flex; gap: 6px; flex-wrap: wrap; background: #fafbfc;
+  }
+  .tag-chip {
+    padding: 3px 9px; border-radius: 12px; background: #f3f4f6;
+    color: #4b5563; font-size: 11px; cursor: pointer;
+    border: 1px solid transparent; font-weight: 500;
+    transition: all 0.15s;
+  }
+  .tag-chip:hover { background: #e5e7eb; }
+  .tag-chip.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .tag-chip.clear { background: #fff; color: #dc2626; border: 1px solid #fecaca; }
+
+  .sidebar-list { flex: 1; overflow-y: auto; }
+  .sidebar-list::-webkit-scrollbar { width: 8px; }
+  .sidebar-list::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 4px; }
+  .sidebar-title {
+    padding: 12px 16px 8px; font-size: 11px; color: #9ca3af;
+    text-transform: uppercase; letter-spacing: 0.6px; font-weight: 600;
+  }
+  .task-item {
+    padding: 11px 16px; cursor: pointer; border-left: 3px solid transparent;
+    transition: background 0.12s;
+  }
+  .task-item:hover { background: #f9fafb; }
+  .task-item.active { background: #eff6ff; border-left-color: #2563eb; }
+  .task-item .title { color: #1f2937; margin-bottom: 3px; font-weight: 500; }
+  .task-item.active .title { color: #1e40af; font-weight: 600; }
+  .task-item .meta { font-size: 11px; color: #9ca3af; }
+  .task-item .task-tags { margin-top: 4px; display: flex; gap: 4px; flex-wrap: wrap; }
+  .task-item .task-tags span {
+    font-size: 10px; padding: 1px 6px; border-radius: 8px;
+    background: #eff6ff; color: #2563eb;
+  }
+  .task-item.solved .title::after {
+    content: "✓"; color: #10b981; margin-left: 6px; font-weight: 700;
+  }
+  .diff-easy { color: #10b981; }
+  .diff-medium { color: #f59e0b; }
+  .diff-hard { color: #ef4444; }
+
+  .main { display: flex; flex-direction: column; overflow: hidden; background: #fff; }
+
+  .task-header {
+    padding: 18px 24px; border-bottom: 1px solid #e1e4e8;
+    background: #f9fafb; max-height: 260px; overflow-y: auto;
+  }
+  .task-header::-webkit-scrollbar { width: 8px; }
+  .task-header::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 4px; }
+  .task-header h2 { font-size: 17px; color: #111827; margin-bottom: 10px; font-weight: 700; }
+  .task-header p { color: #4b5563; line-height: 1.7; }
+  .task-header .tag-list { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .task-header .tag-list span {
+    font-size: 11px; padding: 2px 9px; border-radius: 12px;
+    background: #eff6ff; color: #2563eb; font-weight: 500;
+  }
+  .task-header .my-grade {
+    display: inline-block; margin-top: 12px; padding: 6px 14px;
+    background: #d1fae5; color: #065f46; border-radius: 6px;
+    font-weight: 600; font-size: 13px;
+  }
+  .btn-solution {
+    background: #fff; color: #7c3aed; border: 1px solid #ddd6fe;
+    padding: 7px 14px; border-radius: 6px; cursor: pointer;
+    font-family: inherit; font-size: 12.5px; font-weight: 600;
+    margin-top: 12px;
+  }
+  .btn-solution:hover { background: #f5f3ff; }
+
+  .editor { flex: 1; overflow: hidden; position: relative; }
+  .CodeMirror {
+    height: 100% !important; font-size: 13.5px;
+    font-family: 'Consolas', 'Monaco', monospace; background: #fafbfc;
+  }
+  .CodeMirror-gutters { background: #f3f4f6; border-right: 1px solid #e5e7eb; }
+
+  .bottom {
+    height: 280px; background: #fff; border-top: 1px solid #e1e4e8;
+    display: flex; flex-direction: column;
+  }
+  .bottom-tabs {
+    display: flex; align-items: center; padding: 0 8px;
+    border-bottom: 1px solid #e1e4e8; background: #f9fafb;
+  }
+  .bottom-tab {
+    padding: 11px 16px; font-size: 12.5px; cursor: pointer; color: #6b7280;
+    border-bottom: 2px solid transparent; user-select: none; font-weight: 500;
+  }
+  .bottom-tab:hover { color: #1f2937; }
+  .bottom-tab.active { color: #2563eb; border-bottom-color: #2563eb; }
+  .actions { margin-left: auto; display: flex; gap: 8px; padding: 8px 0; }
+  .btn {
+    padding: 7px 16px; border: none; border-radius: 6px; cursor: pointer;
+    font-size: 12.5px; font-family: inherit; font-weight: 600;
+  }
+  .btn-run { background: #10b981; color: #fff; }
+  .btn-run:hover { background: #059669; }
+  .btn-run:disabled { opacity: 0.6; cursor: wait; }
+  .btn-reset { background: #fff; color: #6b7280; border: 1px solid #d1d5db; }
+  .btn-reset:hover { color: #1f2937; border-color: #9ca3af; background: #f9fafb; }
+  .btn-history {
+    background: #fff; color: #2563eb; border: 1px solid #bfdbfe;
+    padding: 7px 14px; border-radius: 6px; cursor: pointer;
+    font-family: inherit; font-size: 12.5px; font-weight: 600;
+  }
+  .btn-history:hover { background: #eff6ff; }
+
+  .bottom-body {
+    flex: 1; overflow-y: auto; padding: 14px 20px;
+    font-family: 'Consolas', 'Monaco', monospace; font-size: 12.5px;
+  }
+  .bottom-body::-webkit-scrollbar { width: 8px; }
+  .bottom-body::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 4px; }
+
+  .test-row {
+    display: flex; align-items: flex-start; gap: 12px; padding: 10px 0;
+    border-bottom: 1px solid #f3f4f6;
+  }
+  .test-row.custom-test { background: #fffbeb; margin: 0 -20px; padding: 10px 20px; }
+  .test-icon {
+    width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700;
+  }
+  .pass { background: #d1fae5; color: #059669; }
+  .fail { background: #fee2e2; color: #dc2626; }
+  .test-name { flex: 0 0 100px; font-weight: 500; color: #1f2937; }
+  .test-msg { color: #6b7280; font-size: 12px; flex: 1; white-space: pre-wrap; }
+
+  .summary {
+    display: flex; align-items: center; gap: 16px; padding: 12px 20px;
+    background: #f9fafb; border-top: 1px solid #e1e4e8; font-size: 13px;
+  }
+  .summary .score { font-size: 20px; font-weight: 700; font-family: monospace; }
+  .summary .ok { color: #059669; }
+  .summary .err { color: #dc2626; }
+
+  .terminal {
+    color: #1f2937; white-space: pre-wrap; word-break: break-word;
+    line-height: 1.7; background: #f9fafb; padding: 12px 16px;
+    border-radius: 6px; border: 1px solid #e5e7eb;
+  }
+  .terminal.err { color: #b91c1c; background: #fef2f2; border-color: #fecaca; }
+  .empty { color: #9ca3af; text-align: center; padding: 40px; }
+
+  /* Свои тесты */
+  .custom-test-row {
+    display: flex; gap: 8px; margin-bottom: 8px; align-items: center;
+  }
+  .custom-test-row input {
+    flex: 1; padding: 7px 12px; border: 1px solid #d1d5db; border-radius: 5px;
+    font-family: 'Consolas', monospace; font-size: 12px;
+  }
+  .custom-test-row input:focus {
+    outline: none; border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37,99,235,.12);
+  }
+  .custom-test-row .arrow { color: #9ca3af; font-weight: 700; }
+  .btn-del-test {
+    padding: 6px 10px; background: #fff; color: #dc2626;
+    border: 1px solid #fecaca; border-radius: 5px; cursor: pointer; font-weight: 700;
+  }
+  .btn-del-test:hover { background: #fef2f2; }
+  .btn-add-test {
+    padding: 7px 14px; background: #fff; color: #2563eb;
+    border: 1px dashed #93c5fd; border-radius: 6px; cursor: pointer;
+    font-family: inherit; font-size: 12.5px; font-weight: 600; margin-top: 6px;
+  }
+  .btn-add-test:hover { background: #eff6ff; border-style: solid; }
+
+  /* Модалка */
+  .modal-bg {
+    position: fixed; inset: 0; background: rgba(15,23,42,0.55);
+    display: none; align-items: center; justify-content: center; z-index: 100;
+    backdrop-filter: blur(2px);
+  }
+  .modal-bg.show { display: flex; }
+  .modal {
+    background: #fff; border-radius: 10px; max-width: 800px; width: 90%;
+    max-height: 85vh; display: flex; flex-direction: column;
+    box-shadow: 0 20px 50px rgba(0,0,0,0.25);
+  }
+  .modal-header {
+    padding: 18px 24px; border-bottom: 1px solid #e1e4e8;
+    display: flex; align-items: center;
+  }
+  .modal-header h3 { color: #111827; font-size: 15px; font-weight: 700; }
+  .modal-header .close {
+    margin-left: auto; background: transparent; border: none;
+    color: #9ca3af; font-size: 24px; cursor: pointer; line-height: 1;
+  }
+  .modal-header .close:hover { color: #1f2937; }
+  .modal-body { padding: 18px 24px; overflow: auto; }
+
+  .attempt {
+    padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px;
+    margin-bottom: 10px; background: #fafbfc;
+  }
+  .attempt-head {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+  }
+  .attempt-head .lang { font-family: monospace; color: #6b7280; font-size: 11.5px; }
+  .attempt-head .score { font-weight: 700; font-family: monospace; font-size: 13px; }
+  .attempt-head .time { color: #9ca3af; font-size: 11.5px; margin-left: auto; }
+  .attempt pre {
+    background: #fff; padding: 10px; border-radius: 6px;
+    font-size: 12px; border: 1px solid #e5e7eb; overflow-x: auto;
+    color: #1f2937; max-height: 180px; margin: 0;
+  }
+  .solution-pre {
+    background: #f9fafb; padding: 16px; border-radius: 8px;
+    border: 1px solid #e5e7eb;
+    font-family: 'Consolas', monospace; font-size: 12.5px;
+    white-space: pre-wrap; color: #1f2937; line-height: 1.6;
+  }
+  .solution-expl {
+    color: #6b7280; font-size: 12.5px; margin-bottom: 14px; line-height: 1.6;
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">🗄 Онлайн компилятор</div>
+  <span class="badge">Python · C#</span>
+  <input id="studentName" type="text" placeholder="ФИО" autocomplete="off">
+  <input id="studentGroup" type="text" placeholder="Группа" autocomplete="off">
+  <span class="header-status" id="statusText"></span>
+</div>
+
+<div class="layout">
+  <aside class="sidebar">
+    <div class="lang-tabs">
+      <div class="lang-tab active" data-lang="python" onclick="setLanguage('python')">🐍 Python</div>
+      <div class="lang-tab" data-lang="csharp" onclick="setLanguage('csharp')">🔷 C#</div>
+    </div>
+    <div class="tag-filter" id="tagFilter"></div>
+    <div class="sidebar-list">
+      <div class="sidebar-title">Задачи</div>
+      <div id="taskList"><div class="empty">Загрузка...</div></div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <div class="task-header" id="taskHeader">
+      <div class="empty">← Выберите задачу слева</div>
+    </div>
+
+    <div class="editor">
+      <textarea id="code" spellcheck="false"></textarea>
+    </div>
+
+    <div class="bottom">
+      <div class="bottom-tabs">
+        <div class="bottom-tab active" data-tab="tests">🧪 Тесты</div>
+        <div class="bottom-tab" data-tab="output">🖥 Вывод</div>
+        <div class="bottom-tab" data-tab="custom">➕ Свои тесты</div>
+        <div class="actions">
+          <button class="btn btn-history" onclick="showHistory()">📜 Мои попытки</button>
+          <button class="btn btn-reset" onclick="resetCode()">↺ Сбросить</button>
+          <button class="btn btn-run" id="runBtn" onclick="runCode()">▶ Запустить (Ctrl+Enter)</button>
+        </div>
+      </div>
+      <div class="bottom-body" id="bottomBody">
+        <div class="empty">Выберите задачу и нажмите «Запустить»</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<div class="modal-bg" id="historyModal" onclick="closeHistory(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h3 id="historyTitle">История попыток</h3>
+      <button class="close" onclick="closeHistory()">×</button>
+    </div>
+    <div class="modal-body" id="historyBody"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/python/python.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/clike/clike.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/matchbrackets.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/addon/edit/closebrackets.min.js"></script>
+<script>
+  let currentLang = 'python';
+  let currentTask = null;
+  let lastResult = null;
+  let currentTab = 'tests';
+  let allTasks = [];
+  let solvedSet = new Set();
+  let activeTag = '';
+  let customTests = [];
+
+  const DIFF_ORDER = { easy: 0, medium: 1, hard: 2 };
+  const DIFF_LABEL = { easy: '🟢 easy', medium: '🟡 medium', hard: '🔴 hard' };
+  const NAME_KEY = 'oc_student_name';
+  const GROUP_KEY = 'oc_student_group';
+  const SOLVED_KEY = 'oc_solved';
+
+  // ---------- CodeMirror ----------
+  const editor = CodeMirror.fromTextArea(document.getElementById('code'), {
+    lineNumbers: true,
+    mode: 'python',
+    matchBrackets: true,
+    autoCloseBrackets: true,
+    indentUnit: 4,
+    tabSize: 4,
+    lineWrapping: false,
+  });
+
+  // ---------- Имя и группа ----------
+  const nameInput = document.getElementById('studentName');
+  const groupInput = document.getElementById('studentGroup');
+
+  function initName() {
+    const n = localStorage.getItem(NAME_KEY) || '';
+    const g = localStorage.getItem(GROUP_KEY) || '';
+    nameInput.value = n;
+    groupInput.value = g;
+    if (n) nameInput.classList.add('saved');
+  }
+
+  nameInput.addEventListener('input', () => {
+    const v = nameInput.value.trim();
+    if (v) { localStorage.setItem(NAME_KEY, v); nameInput.classList.add('saved'); }
+    else   { localStorage.removeItem(NAME_KEY); nameInput.classList.remove('saved'); }
+  });
+  groupInput.addEventListener('input', () => {
+    const v = groupInput.value.trim();
+    if (v) localStorage.setItem(GROUP_KEY, v);
+    else   localStorage.removeItem(GROUP_KEY);
+  });
+
+  function getStudentName() { return (nameInput.value || '').trim(); }
+  function getStudentGroup() { return (groupInput.value || '').trim(); }
+
+  // ---------- Решённые задачи ----------
+  function initSolved() {
+    try {
+      const arr = JSON.parse(localStorage.getItem(SOLVED_KEY) || '[]');
+      solvedSet = new Set(arr);
+    } catch (e) {}
+  }
+
+  function markSolved(taskId, lang) {
+    solvedSet.add(taskId + '::' + lang);
+    localStorage.setItem(SOLVED_KEY, JSON.stringify([...solvedSet]));
+    renderTaskList();
+  }
+
+  function isSolved(taskId) {
+    return solvedSet.has(taskId + '::' + currentLang);
+  }
+
+  // ---------- Загрузка задач ----------
+  async function loadTaskList() {
+    try {
+      const res = await fetch('/api/tasks');
+      allTasks = await res.json();
+      renderTagFilter();
+      renderTaskList();
+    } catch (e) {
+      document.getElementById('taskList').innerHTML =
+        '<div class="empty" style="color:#dc2626">Ошибка загрузки: ' + escapeHtml(e.message) + '</div>';
+    }
+  }
+
+  function renderTagFilter() {
+    const tags = new Set();
+    allTasks.forEach(t => (t.tags || []).forEach(tag => tags.add(tag)));
+    const box = document.getElementById('tagFilter');
+    if (!tags.size) { box.innerHTML = ''; return; }
+
+    box.innerHTML = '';
+    [...tags].sort().forEach(tag => {
+      const el = document.createElement('span');
+      el.className = 'tag-chip' + (activeTag === tag ? ' active' : '');
+      el.textContent = tag;
+      el.onclick = () => { activeTag = activeTag === tag ? '' : tag; renderTagFilter(); renderTaskList(); };
+      box.appendChild(el);
+    });
+    if (activeTag) {
+      const clr = document.createElement('span');
+      clr.className = 'tag-chip clear';
+      clr.textContent = '✕ сброс';
+      clr.onclick = () => { activeTag = ''; renderTagFilter(); renderTaskList(); };
+      box.appendChild(clr);
+    }
+  }
+
+  function renderTaskList() {
+    const list = document.getElementById('taskList');
+    let filtered = allTasks;
+    if (activeTag) {
+      filtered = filtered.filter(t => (t.tags || []).includes(activeTag));
+    }
+    if (!filtered.length) {
+      list.innerHTML = '<div class="empty">Нет задач по фильтру</div>';
+      return;
+    }
+    const sorted = [...filtered].sort((a, b) => {
+      const da = DIFF_ORDER[a.difficulty] ?? 99;
+      const db = DIFF_ORDER[b.difficulty] ?? 99;
+      if (da !== db) return da - db;
+      return a.title.localeCompare(b.title, 'ru');
+    });
+    list.innerHTML = '';
+    sorted.forEach(t => {
+      const el = document.createElement('div');
+      el.className = 'task-item';
+      if (isSolved(t.id)) el.classList.add('solved');
+      el.dataset.id = t.id;
+      const label = DIFF_LABEL[t.difficulty] || t.difficulty;
+      const tagsHtml = (t.tags || []).length
+        ? '<div class="task-tags">' + t.tags.map(x => '<span>' + escapeHtml(x) + '</span>').join('') + '</div>'
+        : '';
+      el.innerHTML =
+        '<div class="title">' + escapeHtml(t.title) + '</div>' +
+        '<div class="meta diff-' + t.difficulty + '">' + label + '</div>' +
+        tagsHtml;
+      el.onclick = () => openTask(t.id);
+      list.appendChild(el);
+    });
+    if (currentTask) {
+      document.querySelectorAll('.task-item').forEach(el =>
+        el.classList.toggle('active', el.dataset.id === currentTask.id)
+      );
+    }
+  }
+
+  // ---------- Переключение языка ----------
+  function setLanguage(lang) {
+    if (currentLang === lang) return;
+    const hasCode = currentTask && editor.getValue().trim() !== '' &&
+      editor.getValue() !== (currentTask.starter[currentLang] || '');
+    if (hasCode && !confirm('Сменить язык? Несохранённый код будет потерян.')) return;
+    currentLang = lang;
+    document.querySelectorAll('.lang-tab').forEach(el =>
+      el.classList.toggle('active', el.dataset.lang === lang)
+    );
+    editor.setOption('mode', lang === 'python' ? 'python' : 'text/x-csharp');
+    if (currentTask) editor.setValue(currentTask.starter[currentLang] || '');
+    renderTaskList();
+  }
+
+  // ---------- Открытие задачи ----------
+  async function openTask(id) {
+    try {
+      const res = await fetch('/api/tasks/' + id);
+      currentTask = await res.json();
+      lastResult = null;
+      customTests = [];
+
+      document.querySelectorAll('.task-item').forEach(el =>
+        el.classList.toggle('active', el.dataset.id === id)
+      );
+
+      const descHtml = escapeHtml(currentTask.description).replace(/\n/g, '<br>');
+      const diffLabel = DIFF_LABEL[currentTask.difficulty] || currentTask.difficulty;
+      const tagsHtml = (currentTask.tags || []).length
+        ? '<div class="tag-list">' + currentTask.tags.map(x => '<span>#' + escapeHtml(x) + '</span>').join('') + '</div>'
+        : '';
+
+      // Проверим оценку студента
+      const student = getStudentName();
+      let gradeHtml = '';
+      if (student) {
+        try {
+          const gr = await fetch('/api/grades').then(r => r.json());
+          const g = gr.find(x => x.student === student && x.task_id === id);
+          if (g) {
+            const val = g.grade != null ? g.grade : g.auto_grade;
+            const icon = g.grade != null ? '🎓' : '🤖';
+            const label = g.grade != null ? 'Ваша оценка' : 'Предварительная оценка';
+            if (val != null) {
+              gradeHtml = '<div class="my-grade">' + icon + ' ' + label + ': ' + val +
+                (g.comment ? ' — ' + escapeHtml(g.comment) : '') + '</div>';
+            }
+          }
+        } catch (e) {}
+      }
+
+      const solutionBtn = '<div style="margin-top:12px">' +
+        '<button class="btn-solution" onclick="showSolution()">📖 Разбор решения</button>' +
+        '</div>';
+
+      document.getElementById('taskHeader').innerHTML =
+        '<h2>' + escapeHtml(currentTask.title) + '</h2>' +
+        '<p style="color:#9ca3af; font-size:11.5px; margin-bottom:10px">' +
+        'сложность: ' + diffLabel +
+        ' · язык: ' + (currentLang === 'python' ? '🐍 Python' : '🔷 C#') +
+        '</p>' +
+        '<p>' + descHtml + '</p>' +
+        tagsHtml + gradeHtml + solutionBtn;
+
+      editor.setValue(currentTask.starter[currentLang] || '');
+      editor.setOption('mode', currentLang === 'python' ? 'python' : 'text/x-csharp');
+      setTimeout(() => editor.refresh(), 10);
+
+      currentTab = 'tests';
+      document.querySelectorAll('.bottom-tab').forEach(t =>
+        t.classList.toggle('active', t.dataset.tab === 'tests')
+      );
+      renderBottom();
+    } catch (e) {
+      alert('Не удалось загрузить задачу: ' + e.message);
+    }
+  }
+
+  function resetCode() {
+    if (!currentTask) return;
+    if (!confirm('Сбросить код к начальному?')) return;
+    editor.setValue(currentTask.starter[currentLang] || '');
+  }
+
+  // ---------- Разбор решения ----------
+  async function showSolution() {
+    if (!currentTask) return;
+    if (!confirm('Разбор покажет готовое решение. Продолжить?')) return;
+    try {
+      const res = await fetch('/api/tasks/' + currentTask.id + '/solution');
+      if (!res.ok) {
+        const err = await res.json();
+        alert(err.error || 'Разбор не добавлен');
+        return;
+      }
+      const sol = await res.json();
+      const code = sol[currentLang] || sol.python || '';
+      const expl = sol.explanation || '';
+      document.getElementById('historyTitle').textContent =
+        '📖 Разбор: ' + currentTask.title;
+      document.getElementById('historyBody').innerHTML =
+        (expl ? '<div class="solution-expl">' + escapeHtml(expl) + '</div>' : '') +
+        '<pre class="solution-pre">' + escapeHtml(code) + '</pre>';
+      document.getElementById('historyModal').classList.add('show');
+    } catch (e) {
+      alert('Ошибка: ' + e.message);
+    }
+  }
+
+  // ---------- Запуск ----------
+  async function runCode() {
+    if (!currentTask) { alert('Сначала выберите задачу'); return; }
+    const student = getStudentName();
+    if (!student) {
+      alert('Пожалуйста, введите ФИО в поле сверху');
+      nameInput.focus();
+      return;
+    }
+    const btn = document.getElementById('runBtn');
+    const status = document.getElementById('statusText');
+    btn.disabled = true;
+    btn.textContent = '⏳ Выполняется...';
+    status.textContent = currentLang === 'csharp'
+      ? 'Сборка C# может занять до 30 сек...'
+      : 'Выполнение...';
+    status.style.color = '#6b7280';
+
+    const validCustomTests = customTests.filter(t => (t.input || '').length || (t.expected || '').length);
+
+    try {
+      const res = await fetch('/api/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          task_id: currentTask.id,
+          code: editor.getValue(),
+          language: currentLang,
+          student: student,
+          group: getStudentGroup(),
+          custom_tests: validCustomTests
+        })
+      });
+      lastResult = await res.json();
+    } catch (e) {
+      lastResult = { error: 'Ошибка сети: ' + e.message, tests: [] };
+    }
+
+    btn.disabled = false;
+    btn.textContent = '▶ Запустить (Ctrl+Enter)';
+
+    if (lastResult && !lastResult.error &&
+        lastResult.total > 0 && lastResult.passed === lastResult.total) {
+      status.textContent = '✓ Решение сохранено';
+      status.style.color = '#10b981';
+      setTimeout(() => { status.textContent = ''; status.style.color = '#6b7280'; }, 3000);
+      markSolved(currentTask.id, currentLang);
+    } else {
+      status.textContent = '';
+    }
+
+    currentTab = 'tests';
+    document.querySelectorAll('.bottom-tab').forEach(t =>
+      t.classList.toggle('active', t.dataset.tab === 'tests')
+    );
+    renderBottom();
+  }
+
+  // ---------- Вкладки нижней панели ----------
+  document.querySelectorAll('.bottom-tab').forEach(tab => {
+    tab.onclick = () => {
+      currentTab = tab.dataset.tab;
+      document.querySelectorAll('.bottom-tab').forEach(t =>
+        t.classList.toggle('active', t === tab)
+      );
+      renderBottom();
+    };
+  });
+
+  // ---------- Отрисовка нижней панели ----------
+  function renderBottom() {
+    const body = document.getElementById('bottomBody');
+
+    if (currentTab === 'custom') {
+      renderCustomTestsTab(body);
+      return;
+    }
+
+    if (!lastResult) {
+      body.innerHTML = '<div class="empty">Нажмите «Запустить»</div>';
+      return;
+    }
+    if (lastResult.error) {
+      body.innerHTML = '<div class="terminal err">⚠ ' + escapeHtml(lastResult.error) + '</div>';
+      return;
+    }
+    if (currentTab === 'output') {
+      const firstFail = (lastResult.tests || []).find(t => !t.passed);
+      if (firstFail) {
+        body.innerHTML = '<div class="terminal err">' + escapeHtml(firstFail.message) + '</div>';
+      } else {
+        body.innerHTML = '<div class="terminal">Все тесты пройдены ✓</div>';
+      }
+      return;
+    }
+    const tests = lastResult.tests || [];
+    const passed = lastResult.passed || 0;
+    const total = lastResult.total || 0;
+    const allOk = total > 0 && passed === total;
+    if (!tests.length) {
+      body.innerHTML = '<div class="empty">Нет тестов</div>';
+      return;
+    }
+    const rows = tests.map(t => {
+      const isCustom = (t.name || '').startsWith('Свой тест');
+      return '<div class="test-row' + (isCustom ? ' custom-test' : '') + '">' +
+        '<div class="test-icon ' + (t.passed ? 'pass' : 'fail') + '">' +
+          (t.passed ? '✓' : '✕') +
+        '</div>' +
+        '<div class="test-name">' + escapeHtml(t.name) + '</div>' +
+        '<div class="test-msg">' + (t.passed ? '' : escapeHtml(t.message || '')) + '</div>' +
+      '</div>';
+    }).join('');
+    const summary =
+      '<div class="summary">' +
+        '<span>Результат:</span>' +
+        '<span class="score ' + (allOk ? 'ok' : 'err') + '">' + passed + ' / ' + total + '</span>' +
+        '<span style="color:' + (allOk ? '#059669' : '#6b7280') + '">' +
+          (allOk ? '🎉 Все тесты пройдены!' : 'Продолжайте работу') +
+        '</span>' +
+      '</div>';
+    body.innerHTML = rows + summary;
+  }
+
+  function renderCustomTestsTab(body) {
+    body.innerHTML =
+      '<div style="margin-bottom:12px;color:#6b7280;font-size:12px">' +
+        'Добавьте свои тесты — они запустятся вместе со стандартными (максимум 5).' +
+      '</div>' +
+      '<div id="customTestsBox"></div>' +
+      '<button class="btn-add-test" onclick="addCustomTest()">+ Добавить тест</button>';
+    renderCustomTestsRows();
+  }
+
+  function renderCustomTestsRows() {
+    const box = document.getElementById('customTestsBox');
+    if (!box) return;
+    if (!customTests.length) {
+      box.innerHTML = '<div class="empty" style="padding:20px">Пока нет своих тестов</div>';
+      return;
+    }
+    box.innerHTML = customTests.map((ct, i) =>
+      '<div class="custom-test-row">' +
+        '<input value="' + escAttr(ct.input) + '" placeholder="Вход (stdin)" ' +
+          'oninput="customTests[' + i + '].input = this.value">' +
+        '<span class="arrow">→</span>' +
+        '<input value="' + escAttr(ct.expected) + '" placeholder="Ожидаемый вывод" ' +
+          'oninput="customTests[' + i + '].expected = this.value">' +
+        '<button class="btn-del-test" onclick="customTests.splice(' + i + ',1); renderCustomTestsRows()">✕</button>' +
+      '</div>'
+    ).join('');
+  }
+
+  function addCustomTest() {
+    if (customTests.length >= 5) { alert('Максимум 5 своих тестов'); return; }
+    customTests.push({input: '', expected: ''});
+    renderCustomTestsRows();
+  }
+
+  // ---------- История попыток ----------
+  async function showHistory() {
+    const student = getStudentName();
+    if (!student) { alert('Сначала введите ФИО в поле сверху'); return; }
+    try {
+      const res = await fetch('/api/attempts/me?student=' + encodeURIComponent(student));
+      const attempts = await res.json();
+      renderHistory(attempts, student);
+    } catch (e) {
+      alert('Не удалось загрузить историю: ' + e.message);
+    }
+  }
+
+  function renderHistory(attempts, student) {
+    document.getElementById('historyTitle').textContent =
+      '📜 История попыток: ' + student;
+    const body = document.getElementById('historyBody');
+    const filtered = currentTask
+      ? attempts.filter(a => a.task_id === currentTask.id)
+      : attempts;
+
+    if (!filtered.length) {
+      body.innerHTML = '<div class="empty">Пока нет попыток</div>';
+      document.getElementById('historyModal').classList.add('show');
+      return;
+    }
+    const taskTitles = {};
+    allTasks.forEach(t => taskTitles[t.id] = t.title);
+
+    body.innerHTML = filtered.map(a => {
+      const ok = a.passed === a.total;
+      const color = ok ? '#059669' : (a.passed > 0 ? '#d97706' : '#dc2626');
+      return '<div class="attempt">' +
+        '<div class="attempt-head">' +
+          '<span class="lang">' + (a.language === 'csharp' ? 'C#' : 'Python') + '</span>' +
+          '<span class="score" style="color:' + color + '">' + a.passed + ' / ' + a.total + '</span>' +
+          '<span style="color:#6b7280;font-size:11.5px">' + escapeHtml(taskTitles[a.task_id] || a.task_id) + '</span>' +
+          '<span class="time">' + escapeHtml(a.timestamp) + '</span>' +
+        '</div>' +
+        '<pre>' + escapeHtml((a.code || '').slice(0, 500)) +
+          ((a.code || '').length > 500 ? '\n...' : '') + '</pre>' +
+      '</div>';
+    }).join('');
+    document.getElementById('historyModal').classList.add('show');
+  }
+
+  function closeHistory(e) {
+    document.getElementById('historyModal').classList.remove('show');
+  }
+
+  // ---------- Утилиты ----------
+  function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g,
+      c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  function escAttr(s) { return escapeHtml(s); }
+
+  document.addEventListener('keydown', e => {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      runCode();
+    }
+  });
+
+  // ---------- Старт ----------
+  initSolved();
+  initName();
+  loadTaskList();
+</script>
+</body>
+</html>

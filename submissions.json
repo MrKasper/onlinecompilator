@@ -1,0 +1,64 @@
+[
+  {
+    "student": "Пантюхин Даниил",
+    "task_id": "century-year",
+    "language": "csharp",
+    "code": "using System;\n\nclass Program\n{\n    static void Main()\n    {\n        int year = int.Parse(Console.ReadLine());\n        int a = year/100+1;\n        int b = year%100;\n        Console.WriteLine($\"{a} {b}\");\n    }\n}\n",
+    "passed": 5,
+    "total": 5,
+    "timestamp": "2026-10-06 12:56:07",
+    "tests": [
+      {
+        "name": "Тест 1",
+        "passed": true
+      },
+      {
+        "name": "Тест 2",
+        "passed": true
+      },
+      {
+        "name": "Тест 3",
+        "passed": true
+      },
+      {
+        "name": "Тест 4",
+        "passed": true
+      },
+      {
+        "name": "Тест 5",
+        "passed": true
+      }
+    ]
+  },
+  {
+    "student": "Пантюхин Даниил",
+    "task_id": "max-digit-2",
+    "language": "csharp",
+    "code": "using System;\n\nclass Program\n{\n    static void Main()\n    {\n        int n = int.Parse(Console.ReadLine());\n        int a = n/10;\n        int b = n%10;\n        if (a!=b)\n        {\n            if (a>b)\n                Console.WriteLine(a);\n            else\n                Console.WriteLine(b);\n        }\n        else\n            Console.WriteLine(a);\n    }\n}\n",
+    "passed": 5,
+    "total": 5,
+    "timestamp": "2026-10-06 13:08:16",
+    "tests": [
+      {
+        "name": "Тест 1",
+        "passed": true
+      },
+      {
+        "name": "Тест 2",
+        "passed": true
+      },
+      {
+        "name": "Тест 3",
+        "passed": true
+      },
+      {
+        "name": "Тест 4",
+        "passed": true
+      },
+      {
+        "name": "Тест 5",
+        "passed": true
+      }
+    ]
+  }
+]
