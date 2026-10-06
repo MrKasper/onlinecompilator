@@ -1,21 +1,11 @@
 # ============================================================
 # Flask-приложение: онлайн-компилятор
 #
-# Защита:
-#   - rate-limit по IP (главный) и по имени (вспомогательный)
-#   - детект смены имени с одного IP
-#   - чёрный список команд
-#   - очереди на C# / Python
-#   - sandbox для Python (в executor.py)
-#   - логирование подозрительных IP
-#   - разблокировка IP и имён для учителя
-#
-# Сессия:
-#   - секретный ключ из файла .secret_key (стабилен между воркерами)
-#   - cookie HttpOnly, SameSite=Lax, время жизни 8 часов
-#
-# Логи:
-#   - отключены (werkzeug, flask, gunicorn)
+# Защита: rate-limit по IP и имени, детект смены имени,
+#         чёрный список команд, очереди C#/Python, sandbox.
+# Сессия: ключ из .secret_key, cookie HttpOnly + SameSite=Lax.
+# Логи:   отключены (werkzeug, flask).
+# Автооценка: по проценту тестов + количество попыток.
 # ============================================================
 import csv
 import io
@@ -34,7 +24,7 @@ from flask import (
 from tasks import TASKS
 from db import (
     init_db, load_submissions, add_submission, delete_submission,
-    load_attempts, add_attempt,
+    load_attempts, add_attempt, count_attempts,
     load_grades, save_grade, delete_grade,
     get_stats, auto_grade, backup_db,
 )
@@ -42,52 +32,40 @@ from executor import (
     run_code, detect_dotnet, find_python, prepare_csharp_template,
 )
 from security import (
-    # Проверки
     check_rate_limit, check_min_interval,
     check_code_size, check_blacklist, log_suspicious_code,
     check_name_change, check_name_allowed,
     cleanup_old_data,
-    # Подозрительные
     log_suspicious_ip, get_suspicious, clear_suspicious,
     unblock_ip, unblock_name,
-    # Константы
     MAX_REQUEST_SIZE, MAX_CODE_SIZE,
     RATE_STUDENT_MAX, RATE_STUDENT_WINDOW,
     RATE_IP_MAX, RATE_IP_WINDOW,
-    # Очереди
     acquire_cs_slot, release_cs_slot, cs_queue_info,
     acquire_py_slot, release_py_slot, py_queue_info,
 )
 
 
-# ============================================================
-# Константы
-# ============================================================
 HERE = Path(__file__).parent
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "teacher2026")
 
 
 # ============================================================
-# Отключаем логи (werkzeug / flask) ещё до создания app
+# Отключаем логи
 # ============================================================
 import logging
-
 logging.getLogger("werkzeug").disabled = True
 logging.getLogger("flask.app").disabled = True
 logging.getLogger("flask").disabled = True
 
 
 # ============================================================
-# Секретный ключ — ОДИН и тот же для всех воркеров gunicorn
+# Секретный ключ
 # ============================================================
 def _load_secret_key() -> str:
-    """Загружает или создаёт .secret_key. Стабилен между перезапусками."""
-    # 1. Из переменной окружения
     env = os.environ.get("SECRET_KEY")
     if env:
         return env
-
-    # 2. Из файла рядом с проектом
     key_file = HERE / ".secret_key"
     if key_file.exists():
         try:
@@ -96,8 +74,6 @@ def _load_secret_key() -> str:
                 return k
         except Exception:
             pass
-
-    # 3. Генерируем и сохраняем навсегда
     k = secrets.token_hex(32)
     try:
         key_file.write_text(k, encoding="utf-8")
@@ -110,9 +86,6 @@ def _load_secret_key() -> str:
     return k
 
 
-# ============================================================
-# Создание приложения
-# ============================================================
 app = Flask(__name__, static_folder=None)
 app.secret_key = _load_secret_key()
 
@@ -121,15 +94,13 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=False,
-    PERMANENT_SESSION_LIFETIME=8 * 3600,   # 8 часов
+    PERMANENT_SESSION_LIFETIME=8 * 3600,
 )
-
-# Отключаем логгер самого приложения
 app.logger.disabled = True
 
 
 # ============================================================
-# Хелпер: реальный IP клиента (учитывает прокси)
+# Хелпер: IP клиента
 # ============================================================
 def get_client_ip() -> str:
     forwarded = request.headers.get("X-Forwarded-For", "")
@@ -237,7 +208,6 @@ def api_task(task_id):
 
 @app.route("/api/tasks/<task_id>/solution")
 def api_task_solution(task_id):
-    """Разбор решения — только после успешного решения студентом."""
     task = next((t for t in TASKS if t["id"] == task_id), None)
     if not task:
         return jsonify({"error": "Задача не найдена"}), 404
@@ -273,7 +243,7 @@ def api_students():
 
 
 # ============================================================
-# API — запуск (с полной защитой)
+# API — запуск кода
 # ============================================================
 @app.route("/api/run", methods=["POST"])
 def api_run():
@@ -287,10 +257,9 @@ def api_run():
 
     ip = get_client_ip()
 
-    # ---------- 0. Раз в час чистим устаревшие записи ----------
     cleanup_old_data()
 
-    # ---------- 1. Минимальный интервал (2 сек) — по IP ----------
+    # 1. Минимальный интервал
     ok, wait = check_min_interval(ip)
     if not ok:
         return jsonify({
@@ -298,62 +267,60 @@ def api_run():
             "tests": []
         }), 429
 
-    # ---------- 2. Rate limit по IP (ГЛАВНЫЙ) ----------
+    # 2. Rate limit по IP
     if not check_rate_limit(f"ip:{ip}", RATE_IP_MAX, RATE_IP_WINDOW):
         log_suspicious_ip(ip, student,
                           f"rate_limit_ip ({RATE_IP_MAX}/{RATE_IP_WINDOW}s)", code)
         return jsonify({
             "error": f"⏱ Слишком много запросов с вашего IP. "
-                     f"Не более {RATE_IP_MAX} в минуту. Подождите.",
+                     f"Не более {RATE_IP_MAX} в минуту.",
             "tests": []
         }), 429
 
-    # ---------- 3. Rate limit по имени (вспомогательный) ----------
+    # 3. Rate limit по имени
     if not check_rate_limit(f"student:{student}",
                             RATE_STUDENT_MAX, RATE_STUDENT_WINDOW):
         log_suspicious_ip(ip, student,
                           f"rate_limit_name ({RATE_STUDENT_MAX}/{RATE_STUDENT_WINDOW}s)",
                           code)
         return jsonify({
-            "error": f"⏱ Слишком много запусков от имени «{student}». "
-                     f"Не более {RATE_STUDENT_MAX} в минуту.",
+            "error": f"⏱ Слишком много запусков от имени «{student}».",
             "tests": []
         }), 429
 
-    # ---------- 4. Детект смены имени с одного IP ----------
+    # 4. Смена имени
     ok, err = check_name_change(ip, student)
     if not ok:
         log_suspicious_ip(ip, student, "name_change_block", code)
         return jsonify({"error": err, "tests": []}), 429
 
-    # ---------- 5. Строгий режим (если STRICT_NAMES=1) ----------
+    # 5. Строгий режим
     name_err = check_name_allowed(student, group_name)
     if name_err:
         log_suspicious_ip(ip, student, "name_not_allowed", code)
         return jsonify({"error": name_err, "tests": []}), 403
 
-    # ---------- 6. Размер кода ----------
+    # 6. Размер кода
     size_err = check_code_size(code)
     if size_err:
         return jsonify({"error": size_err, "tests": []}), 413
 
-    # ---------- 7. Чёрный список команд ----------
+    # 7. Чёрный список
     danger = check_blacklist(code)
     if danger:
         log_suspicious_ip(ip, student, f"blacklist: {danger[:60]}", code)
         return jsonify({"error": danger, "tests": []}), 400
 
-    # Логируем подозрительное, но не блокируем
     sus = log_suspicious_code(code)
     if sus:
         log_suspicious_ip(ip, student, f"suspicious_code: {sus}", code)
 
-    # ---------- 8. Проверка задачи ----------
+    # 8. Задача
     task = next((t for t in TASKS if t["id"] == task_id), None)
     if not task:
         return jsonify({"error": f"Задача '{task_id}' не найдена", "tests": []}), 404
 
-    # ---------- 9. Очередь на C# / Python ----------
+    # 9. Очередь
     if language == "csharp":
         acquired, position = acquire_cs_slot()
         if not acquired:
@@ -366,7 +333,6 @@ def api_run():
             result = run_code(code, task, language, custom_tests=custom_tests)
         finally:
             release_cs_slot()
-
     elif language == "python":
         acquired, position = acquire_py_slot()
         if not acquired:
@@ -379,11 +345,10 @@ def api_run():
             result = run_code(code, task, language, custom_tests=custom_tests)
         finally:
             release_py_slot()
-
     else:
         return jsonify({"error": f"Язык '{language}' не поддерживается", "tests": []}), 400
 
-    # ---------- 10. Сохранение результата ----------
+    # 10. Сохранение результата
     add_attempt(
         student=student, group_name=group_name,
         task_id=task_id, language=language, code=code,
@@ -399,19 +364,29 @@ def api_run():
             passed=result["passed"], total=result["total"],
             tests=result["tests"],
         )
-        ag = auto_grade(result["passed"], result["total"])
+
+        # Автооценка ставится ТОЛЬКО один раз — при первом успешном
+        # решении. Повторные запуски уже решённой задачи НЕ снижают оценку.
         existing = next(
             (g for g in load_grades()
              if g["student"] == student and g["task_id"] == task_id), None
         )
-        if existing is None or existing.get("grade") is None:
-            save_grade(student, task_id, grade=None, auto_grade=ag)
+        if existing is None:
+            attempts_count = max(count_attempts(student, task_id), 1)
+            ag = auto_grade(result["passed"], result["total"],
+                            attempts=attempts_count)
+            save_grade(
+                student, task_id,
+                grade=None,
+                auto_grade=ag,
+                auto_grade_attempts=attempts_count,
+            )
 
     return jsonify(result)
 
 
 # ============================================================
-# API — админские (защищены)
+# API — админские
 # ============================================================
 @app.route("/api/submissions")
 @admin_required
@@ -442,7 +417,6 @@ def api_attempts():
 
 @app.route("/api/attempts/me")
 def api_attempts_me():
-    """История попыток студента (без авторизации)."""
     student = request.args.get("student", "").strip()
     if not student:
         return jsonify([])
@@ -479,6 +453,42 @@ def api_delete_grade():
     return jsonify({"ok": True})
 
 
+@app.route("/api/recalc-grades", methods=["POST"])
+@admin_required
+def api_recalc_grades():
+    """Пересчитать автооценки там, где НЕТ ручной оценки учителя."""
+    updated = 0
+    skipped = 0
+    for g in load_grades():
+        if g.get("grade") is not None:
+            skipped += 1
+            continue
+
+        student = g["student"]
+        task_id = g["task_id"]
+
+        sub = next(
+            (s for s in load_submissions()
+             if s["student"] == student and s["task_id"] == task_id
+             and s["passed"] == s["total"]),
+            None
+        )
+        if not sub:
+            continue
+
+        attempts_count = max(count_attempts(student, task_id), 1)
+        ag = auto_grade(sub["passed"], sub["total"], attempts=attempts_count)
+        save_grade(
+            student, task_id,
+            grade=None,
+            auto_grade=ag,
+            auto_grade_attempts=attempts_count,
+        )
+        updated += 1
+
+    return jsonify({"ok": True, "updated": updated, "skipped_manual": skipped})
+
+
 @app.route("/api/stats")
 @admin_required
 def api_stats():
@@ -493,19 +503,17 @@ def api_backup():
 
 
 # ============================================================
-# API — подозрительные IP и разблокировка
+# API — подозрительные IP
 # ============================================================
 @app.route("/api/suspicious")
 @admin_required
 def api_suspicious():
-    """Список подозрительных IP с событиями."""
     return jsonify(get_suspicious())
 
 
 @app.route("/api/suspicious", methods=["DELETE"])
 @admin_required
 def api_clear_suspicious():
-    """Полная очистка списка (но БЕЗ снятия блокировок)."""
     clear_suspicious()
     return jsonify({"ok": True})
 
@@ -513,7 +521,6 @@ def api_clear_suspicious():
 @app.route("/api/suspicious/unblock", methods=["POST"])
 @admin_required
 def api_unblock_ip():
-    """Разблокировать IP: снять rate-limit, имя-лимит, смену имени, suspicious."""
     data = request.get_json(force=True) or {}
     ip = (data.get("ip") or "").strip()
     if not ip:
@@ -525,7 +532,6 @@ def api_unblock_ip():
 @app.route("/api/suspicious/unblock-name", methods=["POST"])
 @admin_required
 def api_unblock_name():
-    """Снять лимит с конкретного имени."""
     data = request.get_json(force=True) or {}
     student = (data.get("student") or "").strip()
     if not student:
@@ -547,7 +553,8 @@ def api_export_csv():
     buf = io.StringIO()
     writer = csv.writer(buf, delimiter=";")
     writer.writerow(["Студент", "Группа", "Задача", "Язык",
-                     "Пройдено", "Всего", "Время", "Оценка", "Автооценка",
+                     "Пройдено", "Всего", "Время",
+                     "Оценка", "Автооценка", "Попыток",
                      "Комментарий", "Код"])
     for it in items:
         g = grades_map.get((it["student"], it["task_id"])) or {}
@@ -557,6 +564,7 @@ def api_export_csv():
             it.get("language", ""), it.get("passed", 0), it.get("total", 0),
             it.get("timestamp", ""),
             g.get("grade", ""), g.get("auto_grade", ""),
+            g.get("auto_grade_attempts", ""),
             g.get("comment", ""),
             (it.get("code") or "").replace("\r", ""),
         ])
@@ -641,14 +649,6 @@ if __name__ == "__main__":
     print(f"\n🚀 Студенты: http://{local_ip}:{PORT}")
     print(f"👨‍🏫 Учитель:  http://{local_ip}:{PORT}/admin")
     print(f"🔐 Пароль:   {ADMIN_PASSWORD}")
-    print(f"📚 Задач:    {len(TASKS)}")
-    print(f"🛡  Защита:")
-    print(f"     - IP-лимит:      {RATE_IP_MAX}/{RATE_IP_WINDOW}с (главный)")
-    print(f"     - Имя-лимит:     {RATE_STUDENT_MAX}/{RATE_STUDENT_WINDOW}с")
-    print(f"     - Мин. интервал: 2 сек")
-    print(f"     - Макс. код:     {MAX_CODE_SIZE:,} байт")
-    print(f"     - Макс. запрос:  {MAX_REQUEST_SIZE:,} байт")
-    print(f"     - Очередь C#:    2 одновременно")
-    print(f"     - Очередь Py:    5 одновременно\n")
+    print(f"📚 Задач:    {len(TASKS)}\n")
 
     app.run(host=HOST, port=PORT, debug=False, threaded=True)

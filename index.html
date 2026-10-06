@@ -199,7 +199,6 @@
   .terminal.err { color: #b91c1c; background: #fef2f2; border-color: #fecaca; }
   .empty { color: #9ca3af; text-align: center; padding: 40px; }
 
-  /* Свои тесты */
   .custom-test-row {
     display: flex; gap: 8px; margin-bottom: 8px; align-items: center;
   }
@@ -224,7 +223,6 @@
   }
   .btn-add-test:hover { background: #eff6ff; border-style: solid; }
 
-  /* Модалка */
   .modal-bg {
     position: fixed; inset: 0; background: rgba(15,23,42,0.55);
     display: none; align-items: center; justify-content: center; z-index: 100;
@@ -355,7 +353,6 @@
   const GROUP_KEY = 'oc_student_group';
   const SOLVED_KEY = 'oc_solved';
 
-  // ---------- CodeMirror ----------
   const editor = CodeMirror.fromTextArea(document.getElementById('code'), {
     lineNumbers: true,
     mode: 'python',
@@ -366,7 +363,6 @@
     lineWrapping: false,
   });
 
-  // ---------- Имя и группа ----------
   const nameInput = document.getElementById('studentName');
   const groupInput = document.getElementById('studentGroup');
 
@@ -392,7 +388,6 @@
   function getStudentName() { return (nameInput.value || '').trim(); }
   function getStudentGroup() { return (groupInput.value || '').trim(); }
 
-  // ---------- Решённые задачи ----------
   function initSolved() {
     try {
       const arr = JSON.parse(localStorage.getItem(SOLVED_KEY) || '[]');
@@ -410,7 +405,6 @@
     return solvedSet.has(taskId + '::' + currentLang);
   }
 
-  // ---------- Загрузка задач ----------
   async function loadTaskList() {
     try {
       const res = await fetch('/api/tasks');
@@ -486,7 +480,6 @@
     }
   }
 
-  // ---------- Переключение языка ----------
   function setLanguage(lang) {
     if (currentLang === lang) return;
     const hasCode = currentTask && editor.getValue().trim() !== '' &&
@@ -501,7 +494,6 @@
     renderTaskList();
   }
 
-  // ---------- Открытие задачи ----------
   async function openTask(id) {
     try {
       const res = await fetch('/api/tasks/' + id);
@@ -519,7 +511,6 @@
         ? '<div class="tag-list">' + currentTask.tags.map(x => '<span>#' + escapeHtml(x) + '</span>').join('') + '</div>'
         : '';
 
-      // Проверим оценку студента
       const student = getStudentName();
       let gradeHtml = '';
       if (student) {
@@ -530,8 +521,13 @@
             const val = g.grade != null ? g.grade : g.auto_grade;
             const icon = g.grade != null ? '🎓' : '🤖';
             const label = g.grade != null ? 'Ваша оценка' : 'Предварительная оценка';
+            let extra = '';
+            if (g.grade == null && g.auto_grade_attempts != null) {
+              extra = ' (с ' + g.auto_grade_attempts + '-й попытки)';
+            }
             if (val != null) {
               gradeHtml = '<div class="my-grade">' + icon + ' ' + label + ': ' + val +
+                extra +
                 (g.comment ? ' — ' + escapeHtml(g.comment) : '') + '</div>';
             }
           }
@@ -571,12 +567,13 @@
     editor.setValue(currentTask.starter[currentLang] || '');
   }
 
-  // ---------- Разбор решения ----------
   async function showSolution() {
     if (!currentTask) return;
     if (!confirm('Разбор покажет готовое решение. Продолжить?')) return;
     try {
-      const res = await fetch('/api/tasks/' + currentTask.id + '/solution');
+      const student = getStudentName();
+      const res = await fetch('/api/tasks/' + currentTask.id + '/solution?student=' +
+                              encodeURIComponent(student));
       if (!res.ok) {
         const err = await res.json();
         alert(err.error || 'Разбор не добавлен');
@@ -596,7 +593,6 @@
     }
   }
 
-  // ---------- Запуск ----------
   async function runCode() {
     if (!currentTask) { alert('Сначала выберите задачу'); return; }
     const student = getStudentName();
@@ -654,7 +650,6 @@
     renderBottom();
   }
 
-  // ---------- Вкладки нижней панели ----------
   document.querySelectorAll('.bottom-tab').forEach(tab => {
     tab.onclick = () => {
       currentTab = tab.dataset.tab;
@@ -665,7 +660,6 @@
     };
   });
 
-  // ---------- Отрисовка нижней панели ----------
   function renderBottom() {
     const body = document.getElementById('bottomBody');
 
@@ -755,7 +749,6 @@
     renderCustomTestsRows();
   }
 
-  // ---------- История попыток ----------
   async function showHistory() {
     const student = getStudentName();
     if (!student) { alert('Сначала введите ФИО в поле сверху'); return; }
@@ -805,7 +798,6 @@
     document.getElementById('historyModal').classList.remove('show');
   }
 
-  // ---------- Утилиты ----------
   function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g,
       c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -819,7 +811,6 @@
     }
   });
 
-  // ---------- Старт ----------
   initSolved();
   initName();
   loadTaskList();

@@ -237,19 +237,6 @@
   }
   .btn-del-grade:hover { background: #fef2f2; }
   .grade-saved { color: #059669; font-size: 12px; margin-left: 8px; font-weight: 600; }
-
-  .attempt {
-    padding: 12px; border: 1px solid #e5e7eb; border-radius: 8px;
-    margin-bottom: 10px; background: #fafbfc;
-  }
-  .attempt-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-  .attempt-head .score { font-weight: 700; font-family: monospace; font-size: 13px; }
-  .attempt-head .time { color: #9ca3af; font-size: 11.5px; margin-left: auto; }
-  .attempt pre {
-    background: #fff; padding: 10px; border-radius: 6px;
-    font-size: 12px; border: 1px solid #e5e7eb; overflow-x: auto;
-    color: #1f2937; max-height: 180px; margin: 0;
-  }
 </style>
 </head>
 <body>
@@ -291,6 +278,7 @@
         <option value="graded">Только с оценкой</option>
       </select>
       <button class="btn secondary" onclick="reload()">↻ Обновить</button>
+      <button class="btn secondary" onclick="recalcAutoGrades()">🔄 Пересчитать автооценки</button>
       <button class="btn secondary" onclick="doBackup()">💾 Резервная копия</button>
       <a class="btn" href="/api/export.csv" download>⬇ Экспорт CSV</a>
       <span class="stats" id="stats"></span>
@@ -319,7 +307,6 @@
       <div class="empty">Загрузка...</div>
     </div>
   </div>
-
 </div>
 
 <div class="modal-bg" id="modalBg" onclick="closeModal(event)">
@@ -334,20 +321,18 @@
 
 <script>
   // ============================================================
-  // ГЛОБАЛЬНАЯ ОБЁРТКА fetch — ловит 401 и редиректит на логин
+  // Обёртка fetch — ловит 401 и редиректит на логин
   // ============================================================
   const _origFetch = window.fetch;
   window.fetch = async function(url, options) {
     const res = await _origFetch(url, options);
     if (res.status === 401 && typeof url === 'string' && url.startsWith('/api/')) {
-      // Сессия истекла — уходим на логин
       window.location.href = '/admin/login';
       throw new Error('Сессия истекла');
     }
     return res;
   };
 
-  // ---------- Безопасный JSON ----------
   async function safeJson(res) {
     const ct = res.headers.get('content-type') || '';
     if (!ct.includes('application/json')) {
@@ -358,7 +343,6 @@
     return res.json();
   }
 
-  // ---------- Проверка на объект-ошибку ----------
   function isErrorObject(data) {
     return data
       && typeof data === 'object'
@@ -475,12 +459,23 @@
         return;
       }
       items = Array.isArray(data) ? data : [];
+      await refreshGrades();
       render();
     } catch (e) {
       console.error('[reload]', e);
       document.getElementById('tableWrap').innerHTML =
         '<div class="empty" style="color:#dc2626">Ошибка: ' + esc(e.message) + '</div>';
     }
+  }
+
+  async function refreshGrades() {
+    try {
+      const res = await fetch('/api/grades');
+      const gr = await safeJson(res);
+      if (!Array.isArray(gr)) return;
+      gradesMap = {};
+      gr.forEach(g => gradesMap[g.student + '::' + g.task_id] = g);
+    } catch (e) { console.error(e); }
   }
 
   function getFiltered() {
@@ -531,7 +526,10 @@
         if (g.grade != null) {
           gradeHtml = '<span class="pill grade">🎓 ' + g.grade + '</span>';
         } else if (g.auto_grade != null) {
-          gradeHtml = '<span class="pill auto">🤖 ' + g.auto_grade + '</span>';
+          const extra = g.auto_grade_attempts != null
+            ? ' (' + g.auto_grade_attempts + ' поп.)'
+            : '';
+          gradeHtml = '<span class="pill auto">🤖 ' + g.auto_grade + extra + '</span>';
         }
       }
       return '<tr>' +
@@ -605,10 +603,14 @@
         (v || '—') + '</option>'
     ).join('');
 
-    const autoHtml = g.auto_grade != null
-      ? '<span style="color:#5b21b6;font-size:12px;margin-left:8px">🤖 автооценка: ' +
-        g.auto_grade + '</span>'
-      : '';
+    let autoHtml = '';
+    if (g.auto_grade != null) {
+      const attemptsInfo = g.auto_grade_attempts != null
+        ? ' (с ' + g.auto_grade_attempts + '-й попытки)'
+        : '';
+      autoHtml = '<span style="color:#5b21b6;font-size:12px;margin-left:8px">' +
+        '🤖 автооценка: ' + g.auto_grade + attemptsInfo + '</span>';
+    }
 
     document.getElementById('modalBody').innerHTML =
       '<div class="modal-meta">' +
@@ -689,19 +691,23 @@
     } catch (e) { alert('Ошибка: ' + e.message); }
   }
 
-  async function refreshGrades() {
-    try {
-      const res = await fetch('/api/grades');
-      const gr = await safeJson(res);
-      if (!Array.isArray(gr)) return;
-      gradesMap = {};
-      gr.forEach(g => gradesMap[g.student + '::' + g.task_id] = g);
-    } catch (e) { console.error(e); }
-  }
-
   function closeModal(e) {
     document.getElementById('modalBg').classList.remove('show');
     currentModalItem = null;
+  }
+
+  async function recalcAutoGrades() {
+    if (!confirm('Пересчитать ВСЕ автооценки?\n\n' +
+                 'Это затронет только те решения, где НЕ стоит ручная оценка учителя.\n' +
+                 'Ручные оценки НЕ изменятся.')) return;
+    try {
+      const res = await fetch('/api/recalc-grades', { method: 'POST' });
+      const data = await safeJson(res);
+      if (data.error) { alert('Ошибка: ' + data.error); return; }
+      alert('✅ Пересчитано записей: ' + (data.updated || 0) +
+            '\nПропущено (ручная оценка): ' + (data.skipped_manual || 0));
+      await reload();
+    } catch (e) { alert('Ошибка: ' + e.message); }
   }
 
   async function doBackup() {
@@ -790,7 +796,6 @@
         return;
       }
 
-      // Оставляем только те ключи, где значение — массив
       const ips = Object.keys(data).filter(ip => Array.isArray(data[ip]));
 
       if (ips.length) {
@@ -809,7 +814,6 @@
         return;
       }
 
-      // Сортировка по времени последнего события
       ips.sort((a, b) => {
         const evA = data[a] || [];
         const evB = data[b] || [];
@@ -948,7 +952,6 @@
       await loadRefs();
       await reload();
 
-      // Тихо проверяем бейдж подозрительных
       try {
         const res = await fetch('/api/suspicious');
         const data = await safeJson(res);
@@ -959,9 +962,7 @@
           badge.style.display = 'inline-block';
           badge.textContent = ips.length;
         }
-      } catch (e) {
-        // Игнорируем — это необязательная проверка
-      }
+      } catch (e) {}
     } catch (e) {
       console.error('[init]', e);
       document.getElementById('tableWrap').innerHTML =
