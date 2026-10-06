@@ -1,5 +1,11 @@
 # ============================================================
 # Запуск и проверка решений (Python + C#) с песочницей и кэшем
+#
+# Песочница использует ДВА лимита памяти:
+#   - RLIMIT_DATA — heap (brk/sbrk), мелкие аллокации
+#   - RLIMIT_AS   — всё адресное пространство, включая mmap
+#                   (Python использует mmap для больших массивов,
+#                    поэтому без RLIMIT_AS код может съесть всю RAM)
 # ============================================================
 import os
 import resource
@@ -26,62 +32,78 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-# Лимит памяти: по умолчанию 512 МБ (хватает всем задачам, но не даёт
-# создать массив на несколько гигабайт)
+# Лимит heap-памяти (brk/sbrk): 2 ГБ
 SANDBOX_MEMORY = _env_int("SANDBOX_MEMORY", 2048) * 1024 * 1024
 
+# Запас AS на старт Python (venv + импорты + mmap модулей)
+SANDBOX_AS_EXTRA = _env_int("SANDBOX_AS_EXTRA", 512) * 1024 * 1024
+
 # Лимит CPU: 10 секунд
-SANDBOX_CPU_SEC = _env_int("SANDBOX_CPU_SEC", 15)
+SANDBOX_CPU_SEC = _env_int("SANDBOX_CPU_SEC", 10)
 
 # Лимит размера файла: 5 МБ
 SANDBOX_FILE_SIZE = _env_int("SANDBOX_FILE_SIZE", 5) * 1024 * 1024
 
-# Лимит числа процессов: 20 (защита от fork-бомб)
+# Лимит числа процессов: 20
 SANDBOX_MAX_PROCS = _env_int("SANDBOX_MAX_PROCS", 20)
 
 # Общий таймаут subprocess
 SANDBOX_TIMEOUT = _env_int("SANDBOX_TIMEOUT", 10)
 
-# Отключить песочницу полностью (для отладки): SANDBOX_DISABLE=1
+# Отключить песочницу: SANDBOX_DISABLE=1
 SANDBOX_DISABLE = os.environ.get("SANDBOX_DISABLE", "0") == "1"
 
 
+# ============================================================
+# Лимиты ресурсов для дочернего процесса
+# ============================================================
 def _limit_resources():
     """Ограничения для дочернего процесса (Linux/macOS).
 
-    Используем RLIMIT_DATA вместо RLIMIT_AS, потому что Python
-    резервирует много виртуального адресного пространства (mmap),
-    и RLIMIT_AS может убить процесс ещё до старта.
+    RLIMIT_DATA — heap (brk/sbrk), маленькие объекты.
+    RLIMIT_AS   — всё адресное пространство, включая mmap.
+                  Python использует mmap для больших массивов,
+                  поэтому БЕЗ RLIMIT_AS лимит памяти не работает.
+
+    AS берём с запасом: Python в venv на старте занимает
+    ~300-400 МБ AS (импорт модулей, mmap самого интерпретатора).
     """
-    # Мягкий лимит на данные (куча)
+    # 1. Heap — маленькие объекты
     try:
         resource.setrlimit(resource.RLIMIT_DATA,
                            (SANDBOX_MEMORY, SANDBOX_MEMORY))
     except Exception as e:
-        print(f"[sandbox] RLIMIT_DATA не установлен: {e}")
+        print(f"[sandbox] RLIMIT_DATA: {e}", flush=True)
 
-    # CPU
+    # 2. Всё адресное пространство — ГЛАВНЫЙ лимит
+    as_limit = SANDBOX_MEMORY + SANDBOX_AS_EXTRA
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (as_limit, as_limit))
+    except Exception as e:
+        print(f"[sandbox] RLIMIT_AS: {e}", flush=True)
+
+    # 3. CPU
     try:
         resource.setrlimit(resource.RLIMIT_CPU,
                            (SANDBOX_CPU_SEC, SANDBOX_CPU_SEC + 2))
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[sandbox] RLIMIT_CPU: {e}", flush=True)
 
-    # Размер файла
+    # 4. Размер файла
     try:
         resource.setrlimit(resource.RLIMIT_FSIZE,
                            (SANDBOX_FILE_SIZE, SANDBOX_FILE_SIZE))
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[sandbox] RLIMIT_FSIZE: {e}", flush=True)
 
-    # Число процессов
+    # 5. Число процессов (защита от fork-бомб)
     try:
         resource.setrlimit(resource.RLIMIT_NPROC,
                            (SANDBOX_MAX_PROCS, SANDBOX_MAX_PROCS))
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[sandbox] RLIMIT_NPROC: {e}", flush=True)
 
-    # Без core-дампов
+    # 6. Без core-дампов
     try:
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     except Exception:
@@ -128,6 +150,7 @@ ERROR_HINTS = [
     ("System.NullReferenceException", "💡 C#: обращение к null."),
     ("System.IndexOutOfRangeException", "💡 C#: выход за границы массива."),
     ("System.DivideByZeroException", "💡 C#: деление на ноль."),
+    ("System.OutOfMemoryException", "💡 C#: не хватило памяти."),
 ]
 
 
@@ -155,9 +178,15 @@ def find_python() -> str:
 
 
 def detect_dotnet():
+    """Определяет путь к dotnet и наиболее совместимый target framework.
+
+    Берём МИНИМАЛЬНУЮ мажорную версию SDK — гарантирует совместимость
+    с установленным рантаймом.
+    """
     global _dotnet_cache
     if _dotnet_cache is not None:
         return _dotnet_cache
+
     exe = shutil.which("dotnet") or shutil.which("dotnet.exe")
     if not exe:
         _dotnet_cache = False
@@ -181,7 +210,7 @@ def detect_dotnet():
 
         if versions:
             versions = sorted(set(versions))
-            major = min(versions)
+            major = min(versions)  # минимальная — максимальная совместимость
             if major >= 9:
                 framework = f"net{major}.0"
             elif major == 8:
@@ -190,23 +219,28 @@ def detect_dotnet():
                 framework = "net7.0"
             elif major == 6:
                 framework = "net6.0"
+            print(f"[✓] .NET SDK: {versions}, target = {framework}", flush=True)
     except Exception as e:
-        print(f"[!] Ошибка определения .NET: {e}")
+        print(f"[!] Ошибка определения .NET: {e}", flush=True)
 
     _dotnet_cache = {"exe": exe, "framework": framework}
     return _dotnet_cache
 
 
 def prepare_csharp_template():
+    """Собирает шаблон C# один раз. Кэш ускоряет последующие сборки."""
     info = detect_dotnet()
     if not info:
         return False
 
     csproj = _CS_TEMPLATE / "App.csproj"
+    # Если target framework шаблона не совпадает с текущим — пересобираем
     if csproj.exists():
         try:
             content = csproj.read_text(encoding="utf-8")
             if f"<TargetFramework>{info['framework']}</TargetFramework>" not in content:
+                print(f"[!] Шаблон C# устарел — пересобираю под {info['framework']}",
+                      flush=True)
                 shutil.rmtree(_CS_TEMPLATE, ignore_errors=True)
         except Exception:
             pass
@@ -245,24 +279,64 @@ def prepare_csharp_template():
             timeout=180, encoding="utf-8", errors="replace", env=env,
         )
         if result.returncode != 0:
-            print(f"[!] Не удалось подготовить шаблон C#")
+            print("[!] Не удалось подготовить шаблон C#", flush=True)
+            print((result.stdout or "")[-500:], flush=True)
+            print((result.stderr or "")[-500:], flush=True)
             return False
+        print(f"[✓] Шаблон C# подготовлен ({info['framework']})", flush=True)
         return True
-    except Exception:
+    except Exception as e:
+        print(f"[!] Ошибка подготовки шаблона C#: {e}", flush=True)
         return False
 
 
 # ============================================================
-# Нормализация
+# Нормализация вывода
 # ============================================================
 def _normalize(s):
     if s is None:
         return ""
     s = str(s).replace("\ufeff", "").replace("\ufffd", "")
     lines = [l.rstrip() for l in s.split("\n")]
-    while lines and not lines[-1]: lines.pop()
-    while lines and not lines[0]:  lines.pop(0)
+    while lines and not lines[-1]:
+        lines.pop()
+    while lines and not lines[0]:
+        lines.pop(0)
     return "\n".join(lines)
+
+
+# ============================================================
+# Обработка кодов возврата
+# ============================================================
+def _describe_exit(returncode: int, stderr: str, language: str) -> str:
+    """Человеко-понятное описание kill-сигналов."""
+    err = stderr or ""
+
+    # SIGXCPU (24) / 152 — превышен RLIMIT_CPU
+    if returncode in (-24, 152):
+        return (err + f"\n\n⏱ Превышен лимит CPU ({SANDBOX_CPU_SEC} сек).\n"
+                       "💡 Проверьте, нет ли бесконечного цикла.").strip()
+
+    # SIGKILL (9) / 137 — OOM или hard CPU limit
+    if returncode in (-9, 137):
+        mem_mb = SANDBOX_MEMORY // (1024 * 1024)
+        as_mb = (SANDBOX_MEMORY + SANDBOX_AS_EXTRA) // (1024 * 1024)
+        return (err + "\n\n⏱ Программа убита системой (SIGKILL).\n"
+                      f"💡 Вероятные причины:\n"
+                      f"   • Превышен лимит памяти (heap {mem_mb} МБ, "
+                      f"всего {as_mb} МБ)\n"
+                      f"   • Превышен жёсткий лимит CPU "
+                      f"({SANDBOX_CPU_SEC + 2} сек)\n"
+                      f"   • Проверьте, нет ли очень больших массивов "
+                      f"или бесконечного цикла.").strip()
+
+    # SIGSEGV (11) / 139 — сегфолт
+    if returncode in (-11, 139):
+        return (err + "\n\n💥 Программа аварийно завершилась (SIGSEGV).\n"
+                      "💡 Возможно, переполнение стека или обращение "
+                      "к некорректному адресу.").strip()
+
+    return err
 
 
 # ============================================================
@@ -322,7 +396,7 @@ def _run_python(code, tmp_path, test_cases):
     env["PYTHONUTF8"] = "1"
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["OMP_NUM_THREADS"] = "1"
-    env["MALLOC_ARENA_MAX"] = "2"   # снижает потребление памяти glibc
+    env["MALLOC_ARENA_MAX"] = "2"   # снижает фрагментацию glibc
 
     preexec = _preexec_fn()
 
@@ -343,38 +417,31 @@ def _run_python(code, tmp_path, test_cases):
             r = subprocess.run([python_exe, "-X", "utf8", "main.py"], **kwargs)
 
             if r.returncode != 0:
-                err = r.stderr or ""
-
-                # Расшифровка kill-сигналов
-                if r.returncode == -9 or r.returncode == 137:
-                    err = (err + "\n⏱ Программа убита системой.\n"
-                           "💡 Возможно, превышен лимит памяти "
-                           f"({SANDBOX_MEMORY // (1024*1024)} МБ) или CPU "
-                           f"({SANDBOX_CPU_SEC} сек).").strip()
-                elif r.returncode == -24 or r.returncode == 152:
-                    err = (err + "\n⏱ Программа убита — превышен лимит CPU "
-                           f"({SANDBOX_CPU_SEC} сек).").strip()
-
+                err = _describe_exit(r.returncode, r.stderr or "", "python")
                 results.append({
                     "name": name, "passed": False,
-                    "message": "Ошибка:\n" + humanize_error(err, "python")[:600],
+                    "message": "Ошибка:\n" + humanize_error(err, "python")[:700],
                 })
                 continue
 
             passed = _normalize(r.stdout) == _normalize(expected)
             msg = "OK" if passed else (
-                f"Вход: {stdin!r}\nОжидалось: {expected!r}\nПолучено:  {(r.stdout or '').strip()!r}"
+                f"Вход: {stdin!r}\n"
+                f"Ожидалось: {expected!r}\n"
+                f"Получено:  {(r.stdout or '').strip()!r}"
             )
             results.append({"name": name, "passed": passed, "message": msg})
+
         except subprocess.TimeoutExpired:
             results.append({
                 "name": name, "passed": False,
                 "message": f"⏱ Превышено время выполнения ({SANDBOX_TIMEOUT} сек).\n"
-                           "💡 Возможно, бесконечный цикл.",
+                           "💡 Возможно, бесконечный цикл или ожидание ввода.",
             })
         except Exception as e:
             results.append({"name": name, "passed": False,
-                            "message": f"Ошибка: {e}"})
+                            "message": f"Внутренняя ошибка: {e}"})
+
     return results, None
 
 
@@ -387,6 +454,7 @@ def _run_csharp(code, tmp_path, test_cases):
         return None, {"error": "Не найден .NET SDK. Установите .NET 8: "
                                "sudo apt install dotnet-sdk-8.0"}
 
+    # Копируем шаблон (obj/, bin/, nuget-кэш) — ускоряет сборку
     if _CS_TEMPLATE.exists():
         try:
             shutil.copytree(_CS_TEMPLATE, tmp_path, dirs_exist_ok=True)
@@ -418,7 +486,8 @@ def _run_csharp(code, tmp_path, test_cases):
     out_dir = tmp_path / "out"
     no_restore = (tmp_path / "obj" / "project.assets.json").exists()
 
-    build_args = [info["exe"], "build", "-c", "Release", "-o", str(out_dir), "--nologo"]
+    build_args = [info["exe"], "build", "-c", "Release",
+                  "-o", str(out_dir), "--nologo"]
     if no_restore:
         build_args.append("--no-restore")
 
@@ -438,7 +507,7 @@ def _run_csharp(code, tmp_path, test_cases):
     exe_name = "App.exe" if sys.platform == "win32" else "App"
     exe_path = out_dir / exe_name
     if not exe_path.exists():
-        return None, {"error": f"Не найден {exe_path}"}
+        return None, {"error": f"Не найден скомпилированный файл: {exe_path}"}
 
     preexec = _preexec_fn()
     results = []
@@ -458,22 +527,28 @@ def _run_csharp(code, tmp_path, test_cases):
             r = subprocess.run([str(exe_path)], **kwargs)
 
             if r.returncode != 0:
-                err = r.stderr or ""
-                if r.returncode in (-9, 137):
-                    err = (err + "\n⏱ Программа убита — превышен лимит памяти.").strip()
+                err = _describe_exit(r.returncode, r.stderr or "", "csharp")
                 results.append({
                     "name": name, "passed": False,
-                    "message": "Ошибка:\n" + humanize_error(err, "csharp")[:600],
+                    "message": "Ошибка:\n" + humanize_error(err, "csharp")[:700],
                 })
                 continue
+
             passed = _normalize(r.stdout) == _normalize(expected)
             msg = "OK" if passed else (
-                f"Вход: {stdin!r}\nОжидалось: {expected!r}\nПолучено:  {(r.stdout or '').strip()!r}"
+                f"Вход: {stdin!r}\n"
+                f"Ожидалось: {expected!r}\n"
+                f"Получено:  {(r.stdout or '').strip()!r}"
             )
             results.append({"name": name, "passed": passed, "message": msg})
+
         except subprocess.TimeoutExpired:
-            results.append({"name": name, "passed": False,
-                            "message": f"⏱ Превышено время ({SANDBOX_TIMEOUT} сек)."})
+            results.append({
+                "name": name, "passed": False,
+                "message": f"⏱ Превышено время ({SANDBOX_TIMEOUT} сек).",
+            })
         except Exception as e:
-            results.append({"name": name, "passed": False, "message": f"Ошибка: {e}"})
+            results.append({"name": name, "passed": False,
+                            "message": f"Внутренняя ошибка: {e}"})
+
     return results, None
