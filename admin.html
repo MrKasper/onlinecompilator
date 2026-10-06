@@ -59,10 +59,11 @@
     background: #fff; color: #4b5563; border: 1px solid #d1d5db;
   }
   .controls .btn.secondary:hover { color: #1f2937; border-color: #9ca3af; background: #f9fafb; }
-  .controls .btn.success { background: #10b981; }
-  .controls .btn.success:hover { background: #059669; }
+  .controls .btn.danger { background: #dc2626; }
+  .controls .btn.danger:hover { background: #b91c1c; }
   .controls .stats { margin-left: auto; color: #6b7280; font-size: 12.5px; }
   .controls .stats b { color: #059669; }
+  .controls .stats b.danger { color: #dc2626; }
 
   table {
     width: 100%; border-collapse: collapse; background: #fff;
@@ -91,16 +92,21 @@
   .pill.bad { background: #fee2e2; color: #991b1b; }
   .pill.grade { background: #dbeafe; color: #1e40af; }
   .pill.auto { background: #ede9fe; color: #5b21b6; }
+  .pill.danger { background: #fee2e2; color: #991b1b; }
+  .pill.warn { background: #fef3c7; color: #92400e; }
+  .pill.info { background: #dbeafe; color: #1e40af; }
 
-  .btn-view, .btn-del {
+  .btn-view, .btn-del, .btn-unblock {
     padding: 5px 12px; font-size: 11.5px; border-radius: 5px;
-    background: #fff; color: #2563eb; border: 1px solid #bfdbfe;
-    cursor: pointer; font-family: inherit; font-weight: 500;
+    background: #fff; cursor: pointer; font-family: inherit; font-weight: 500;
     margin-left: 4px;
   }
+  .btn-view { color: #2563eb; border: 1px solid #bfdbfe; }
   .btn-view:hover { background: #eff6ff; border-color: #2563eb; }
-  .btn-del { color: #dc2626; border-color: #fecaca; }
+  .btn-del { color: #dc2626; border: 1px solid #fecaca; }
   .btn-del:hover { background: #fef2f2; border-color: #dc2626; }
+  .btn-unblock { color: #059669; border: 1px solid #a7f3d0; background: #ecfdf5; }
+  .btn-unblock:hover { background: #d1fae5; border-color: #059669; }
 
   .empty { text-align: center; padding: 60px 20px; color: #9ca3af; }
 
@@ -121,6 +127,55 @@
   .stat-row span:last-child { color: #1f2937; font-weight: 600; font-family: monospace; }
   .stat-row .ok { color: #059669; }
   .stat-row .warn { color: #d97706; }
+
+  /* Подозрительные */
+  .susp-card {
+    background: #fff; border-radius: 10px; padding: 18px;
+    border: 1px solid #e1e4e8; margin-bottom: 14px;
+    border-left: 4px solid #dc2626;
+  }
+  .susp-head {
+    display: flex; align-items: center; gap: 12px;
+    padding-bottom: 12px; border-bottom: 1px solid #f3f4f6;
+    margin-bottom: 12px;
+  }
+  .susp-ip {
+    font-family: 'Consolas', monospace; font-weight: 700;
+    color: #111827; font-size: 15px;
+  }
+  .susp-count {
+    background: #fee2e2; color: #991b1b;
+    font-size: 11px; padding: 2px 8px; border-radius: 10px; font-weight: 700;
+  }
+  .susp-actions { margin-left: auto; }
+
+  .event {
+    padding: 10px 12px; background: #fafbfc;
+    border-radius: 6px; margin-bottom: 8px;
+    border-left: 3px solid #e5e7eb;
+  }
+  .event.reason-rate_limit_ip { border-left-color: #f59e0b; }
+  .event.reason-rate_limit_name { border-left-color: #f59e0b; }
+  .event.reason-name_change_block { border-left-color: #dc2626; }
+  .event.reason-blacklist { border-left-color: #dc2626; }
+  .event.reason-suspicious_code { border-left-color: #8b5cf6; }
+  .event.reason-cs_queue_overflow { border-left-color: #0891b2; }
+  .event.reason-py_queue_overflow { border-left-color: #0891b2; }
+  .event.reason-name_not_allowed { border-left-color: #dc2626; }
+
+  .event-head {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px; margin-bottom: 6px;
+  }
+  .event-student { font-weight: 600; color: #1f2937; }
+  .event-time { color: #9ca3af; margin-left: auto; font-size: 11.5px; }
+  .event-reason { color: #6b7280; font-size: 11.5px; }
+  .event-code {
+    background: #fff; padding: 8px 10px; border-radius: 5px;
+    font-family: 'Consolas', monospace; font-size: 11.5px;
+    color: #374151; white-space: pre-wrap; word-break: break-word;
+    max-height: 100px; overflow-y: auto; border: 1px solid #e5e7eb;
+  }
 
   /* Модалка */
   .modal-bg {
@@ -209,6 +264,10 @@
   <nav>
     <button id="tabBtnSolutions" class="active" onclick="switchTab('solutions')">📋 Решения</button>
     <button id="tabBtnStats" onclick="switchTab('stats')">📊 Статистика</button>
+    <button id="tabBtnSuspicious" onclick="switchTab('suspicious')">
+      🕵 Подозрительные <span id="suspBadge" style="display:none;background:#dc2626;color:#fff;
+      padding:1px 7px;border-radius:10px;font-size:10px;margin-left:4px;font-weight:700"></span>
+    </button>
     <a href="/">← К компилятору</a>
     <a href="/admin/logout" class="logout">Выйти</a>
   </nav>
@@ -216,6 +275,7 @@
 
 <div class="container">
 
+  <!-- Решения -->
   <div id="tabSolutions">
     <div class="controls">
       <input id="searchStudent" type="text" placeholder="Поиск по имени...">
@@ -241,11 +301,24 @@
     <div id="tableWrap"><div class="empty">Загрузка...</div></div>
   </div>
 
+  <!-- Статистика -->
   <div id="tabStats" style="display:none">
     <div class="controls">
       <button class="btn secondary" onclick="loadStats()">↻ Обновить</button>
     </div>
     <div id="statsWrap" class="stats-grid">
+      <div class="empty">Загрузка...</div>
+    </div>
+  </div>
+
+  <!-- Подозрительные -->
+  <div id="tabSuspicious" style="display:none">
+    <div class="controls">
+      <button class="btn secondary" onclick="loadSuspicious()">↻ Обновить</button>
+      <button class="btn danger" onclick="clearAllSuspicious()">🗑 Очистить всё</button>
+      <span class="stats" id="suspStats"></span>
+    </div>
+    <div id="suspWrap">
       <div class="empty">Загрузка...</div>
     </div>
   </div>
@@ -267,6 +340,34 @@
   let taskTitles = {};
   let currentModalItem = null;
 
+  const REASON_LABELS = {
+    rate_limit_ip: '🚦 Превышен IP-лимит',
+    rate_limit_name: '🚦 Превышен лимит имени',
+    name_change_block: '🎭 Смена имени',
+    blacklist: '🚫 Чёрный список',
+    suspicious_code: '⚠ Подозрительный код',
+    cs_queue_overflow: '⏳ Очередь C# переполнена',
+    py_queue_overflow: '⏳ Очередь Python переполнена',
+    name_not_allowed: '🔒 Имя не из списка',
+  };
+
+  function reasonLabel(reason) {
+    for (const key in REASON_LABELS) {
+      if (reason.startsWith(key)) return REASON_LABELS[key];
+    }
+    return reason;
+  }
+
+  function reasonClass(reason) {
+    for (const key in REASON_LABELS) {
+      if (reason.startsWith(key)) return 'reason-' + key;
+    }
+    return '';
+  }
+
+  // ============================================================
+  // Загрузка справочников
+  // ============================================================
   async function loadRefs() {
     try {
       const [tasks, grades, submissions] = await Promise.all([
@@ -282,7 +383,6 @@
         sel.appendChild(opt);
       });
 
-      // Собрать студентов и группы из submissions
       const students = new Set();
       const groups = new Set();
       submissions.forEach(s => {
@@ -308,6 +408,9 @@
     }
   }
 
+  // ============================================================
+  // Решения
+  // ============================================================
   async function reload() {
     try {
       const res = await fetch('/api/submissions');
@@ -486,7 +589,6 @@
 
       if (res.ok) {
         await refreshGrades();
-        const key = it.student + '::' + it.task_id;
         document.getElementById('gradeSaved').textContent = '✓ Сохранено';
         setTimeout(() => {
           const el = document.getElementById('gradeSaved');
@@ -539,7 +641,9 @@
     } catch (e) { alert(e.message); }
   }
 
-  // ---------- Статистика ----------
+  // ============================================================
+  // Статистика
+  // ============================================================
   async function loadStats() {
     try {
       const stats = await fetch('/api/stats').then(r => r.json());
@@ -550,7 +654,6 @@
         return;
       }
 
-      // группы по студентам
       const groupsByStudent = {};
       items.forEach(it => {
         if (it.student && it.group_name && !groupsByStudent[it.student]) {
@@ -582,12 +685,121 @@
     }
   }
 
+  // ============================================================
+  // Подозрительные
+  // ============================================================
+  async function loadSuspicious() {
+    try {
+      const data = await fetch('/api/suspicious').then(r => r.json());
+      const wrap = document.getElementById('suspWrap');
+      const ips = Object.keys(data);
+
+      // Бейдж в шапке
+      const badge = document.getElementById('suspBadge');
+      if (ips.length) {
+        badge.style.display = 'inline-block';
+        badge.textContent = ips.length;
+      } else {
+        badge.style.display = 'none';
+      }
+
+      document.getElementById('suspStats').innerHTML =
+        `Подозрительных IP: <b class="${ips.length ? 'danger' : ''}">${ips.length}</b>`;
+
+      if (!ips.length) {
+        wrap.innerHTML = '<div class="empty">🎉 Подозрительных IP нет</div>';
+        return;
+      }
+
+      // Сортируем по времени последнего события (свежие сверху)
+      ips.sort((a, b) => {
+        const ta = data[a][data[a].length - 1]?.time || '';
+        const tb = data[b][data[b].length - 1]?.time || '';
+        return tb.localeCompare(ta);
+      });
+
+      wrap.innerHTML = ips.map(ip => {
+        const events = data[ip];
+        const eventsHtml = events.slice().reverse().map(ev => `
+          <div class="event ${reasonClass(ev.reason || '')}">
+            <div class="event-head">
+              <span class="event-student">${esc(ev.student || '—')}</span>
+              <span class="event-reason">${esc(reasonLabel(ev.reason || ''))}</span>
+              <span class="event-time">${esc(ev.time || '')}</span>
+            </div>
+            ${ev.code ? '<div class="event-code">' + esc(ev.code) + '</div>' : ''}
+          </div>
+        `).join('');
+
+        return '<div class="susp-card">' +
+          '<div class="susp-head">' +
+            '<span class="susp-ip">' + esc(ip) + '</span>' +
+            '<span class="susp-count">' + events.length + ' событий</span>' +
+            '<span class="susp-actions">' +
+              '<button class="btn-unblock" onclick="unblockIp(\'' +
+                esc(ip).replace(/'/g, "\\'") + '\')">🔓 Разблокировать</button>' +
+            '</span>' +
+          '</div>' +
+          eventsHtml +
+        '</div>';
+      }).join('');
+    } catch (e) {
+      document.getElementById('suspWrap').innerHTML =
+        '<div class="empty" style="color:#dc2626">Ошибка: ' + e.message + '</div>';
+    }
+  }
+
+  async function unblockIp(ip) {
+    if (!confirm('Разблокировать IP ' + ip + '?\n\n' +
+                 'Будут сняты:\n' +
+                 '• Все rate-limit\'ы\n' +
+                 '• История имён с этого IP\n' +
+                 '• Запись из «Подозрительных»')) return;
+    try {
+      const res = await fetch('/api/suspicious/unblock', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ip: ip })
+      }).then(r => r.json());
+
+      if (res.ok) {
+        const r = res.result;
+        alert('✅ IP ' + ip + ' разблокирован\n\n' +
+              'Снято rate-limit: ' + r.cleared_rate + '\n' +
+              'Снято записей имён: ' + r.cleared_name + '\n' +
+              'Удалено событий: ' + r.cleared_suspicious);
+        loadSuspicious();
+      } else {
+        alert(res.error || 'Ошибка разблокировки');
+      }
+    } catch (e) {
+      alert('Ошибка: ' + e.message);
+    }
+  }
+
+  async function clearAllSuspicious() {
+    if (!confirm('Очистить ВСЕ подозрительные IP?\n\n' +
+                 '⚠️ Это также снимет все блокировки!')) return;
+    try {
+      await fetch('/api/suspicious', { method: 'DELETE' });
+      loadSuspicious();
+    } catch (e) {
+      alert('Ошибка: ' + e.message);
+    }
+  }
+
+  // ============================================================
+  // Переключение вкладок
+  // ============================================================
   function switchTab(name) {
     document.getElementById('tabBtnSolutions').classList.toggle('active', name === 'solutions');
     document.getElementById('tabBtnStats').classList.toggle('active', name === 'stats');
+    document.getElementById('tabBtnSuspicious').classList.toggle('active', name === 'suspicious');
     document.getElementById('tabSolutions').style.display = name === 'solutions' ? '' : 'none';
     document.getElementById('tabStats').style.display = name === 'stats' ? '' : 'none';
+    document.getElementById('tabSuspicious').style.display = name === 'suspicious' ? '' : 'none';
     if (name === 'stats') loadStats();
+    if (name === 'suspicious') loadSuspicious();
   }
 
   function esc(s) {
@@ -601,13 +813,28 @@
       document.getElementById(id).addEventListener('change', render);
     });
 
+  // Автообновление
   setInterval(() => {
     if (document.getElementById('tabSolutions').style.display !== 'none') {
       reload();
     }
-  }, 10000);
+    if (document.getElementById('tabSuspicious').style.display !== 'none') {
+      loadSuspicious();
+    }
+  }, 15000);
 
-  loadRefs().then(reload);
+  // Старт — загружаем бейдж с количеством подозрительных сразу
+  loadRefs().then(() => {
+    reload();
+    fetch('/api/suspicious').then(r => r.json()).then(data => {
+      const n = Object.keys(data).length;
+      if (n > 0) {
+        const badge = document.getElementById('suspBadge');
+        badge.style.display = 'inline-block';
+        badge.textContent = n;
+      }
+    }).catch(() => {});
+  });
 </script>
 </body>
 </html>
