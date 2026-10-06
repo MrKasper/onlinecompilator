@@ -10,6 +10,7 @@
 #   C#:
 #     - RLIMIT_AS НЕЛЬЗЯ — CoreCLR резервирует 10-20 ГБ AS при старте
 #     - Используем DOTNET_GCHeapHardLimit — лимит управляемой кучи
+#       ВАЖНО: значение передаётся в HEX-формате (без префикса 0x)
 #     - RLIMIT_CPU  — лимит CPU
 # ============================================================
 import os
@@ -38,15 +39,11 @@ def _env_int(name: str, default: int) -> int:
 
 
 # ---------- Python ----------
-# Heap-память (brk/sbrk)
-SANDBOX_MEMORY = _env_int("SANDBOX_MEMORY", 2048) * 1024 * 1024
-# Запас AS на старт Python (venv + импорты)
-SANDBOX_AS_EXTRA = _env_int("SANDBOX_AS_EXTRA", 512) * 1024 * 1024
+SANDBOX_MEMORY = _env_int("SANDBOX_MEMORY", 2048) * 1024 * 1024      # heap
+SANDBOX_AS_EXTRA = _env_int("SANDBOX_AS_EXTRA", 512) * 1024 * 1024   # запас AS
 
 # ---------- C# ----------
-# Лимит управляемой кучи .NET (DOTNET_GCHeapHardLimit)
-# CoreCLR НЕ ограничивается по RLIMIT_AS — используем это
-CS_HEAP_LIMIT = _env_int("CS_HEAP_LIMIT", 1024) * 1024 * 1024
+CS_HEAP_LIMIT = _env_int("CS_HEAP_LIMIT", 1024) * 1024 * 1024        # 1 ГБ
 
 # ---------- Общие ----------
 SANDBOX_CPU_SEC = _env_int("SANDBOX_CPU_SEC", 15)
@@ -60,12 +57,7 @@ SANDBOX_DISABLE = os.environ.get("SANDBOX_DISABLE", "0") == "1"
 # Лимиты для Python
 # ============================================================
 def _limit_resources_python():
-    """Лимиты для дочернего Python.
-
-    RLIMIT_DATA — heap (brk/sbrk).
-    RLIMIT_AS   — всё адресное пространство, важно для mmap.
-                  Python использует mmap для больших массивов.
-    """
+    """Лимиты для дочернего Python-процесса."""
     # 1. Heap — маленькие объекты
     try:
         resource.setrlimit(resource.RLIMIT_DATA,
@@ -73,7 +65,7 @@ def _limit_resources_python():
     except Exception as e:
         print(f"[sandbox-py] RLIMIT_DATA: {e}", flush=True)
 
-    # 2. Общее адресное пространство
+    # 2. Общее адресное пространство (важно для mmap)
     as_limit = SANDBOX_MEMORY + SANDBOX_AS_EXTRA
     try:
         resource.setrlimit(resource.RLIMIT_AS, (as_limit, as_limit))
@@ -114,15 +106,14 @@ def _limit_resources_python():
 def _limit_resources_csharp():
     """Лимиты для дочернего C#-процесса.
 
-    ВАЖНО: НЕ ставим RLIMIT_AS!
+    ВАЖНО: НЕ ставим RLIMIT_AS и RLIMIT_DATA!
     CoreCLR при старте резервирует 10-20 ГБ виртуального пространства
     (GC, JIT, стеки потоков). Если поставить RLIMIT_AS, рантайм
     падает с "Failed to create CoreCLR, HRESULT: 0x80070008".
 
-    Память ограничиваем через DOTNET_GCHeapHardLimit (env-переменная,
-    ставится в _run_csharp).
+    Память ограничиваем через DOTNET_GCHeapHardLimit (env-переменная).
     """
-    # 1. CPU — важно
+    # 1. CPU
     try:
         resource.setrlimit(resource.RLIMIT_CPU,
                            (SANDBOX_CPU_SEC, SANDBOX_CPU_SEC + 2))
@@ -184,7 +175,7 @@ ERROR_HINTS = [
     ("CS0266",  "💡 C#: нужно явное приведение (int) или (double)."),
     ("CS0165",  "💡 C#: используется неинициализированная переменная."),
     ("NETSDK1045", "💡 C#: установленная версия .NET SDK не поддерживает target framework."),
-    ("System.FormatException", "💡 C#: не удалось разобрать число. Проверьте входные данные."),
+    ("System.FormatException", "💡 C#: не удалось разобрать число."),
     ("System.NullReferenceException", "💡 C#: обращение к null."),
     ("System.IndexOutOfRangeException", "💡 C#: выход за границы массива."),
     ("System.DivideByZeroException", "💡 C#: деление на ноль."),
@@ -245,7 +236,7 @@ def detect_dotnet():
 
         if versions:
             versions = sorted(set(versions))
-            major = min(versions)   # минимальная — максимальная совместимость
+            major = min(versions)
             if major >= 9:
                 framework = f"net{major}.0"
             elif major == 8:
@@ -341,7 +332,6 @@ def _normalize(s):
 # Обработка кодов возврата
 # ============================================================
 def _describe_exit(returncode: int, stderr: str, language: str) -> str:
-    """Человеко-понятное описание kill-сигналов."""
     err = stderr or ""
 
     if returncode in (-24, 152):     # SIGXCPU
@@ -517,13 +507,28 @@ def _run_csharp(code, tmp_path, test_cases):
     env["DOTNET_NOLOGO"] = "1"
     env["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1"
 
-    # Лимит управляемой кучи .NET — вместо RLIMIT_AS
-    env["DOTNET_GCHeapHardLimit"] = str(CS_HEAP_LIMIT)
-    # Уменьшаем нагрузку на старт рантайма
+    # ============================================================
+    # Лимит управляемой кучи .NET
+    #
+    # ВАЖНО: переменная DOTNET_GCHeapHardLimit принимает значение
+    # в HEX-формате БЕЗ префикса 0x!
+    #
+    #   256 МБ = 268435456  = 0x10000000  → "10000000"
+    #   512 МБ = 536870912  = 0x20000000  → "20000000"
+    #   1   ГБ = 1073741824 = 0x40000000  → "40000000"
+    #   2   ГБ = 2147483648 = 0x80000000  → "80000000"
+    #
+    # Если передать "1024" — .NET поймёт как 0x1024 = 4 КБ и
+    # CoreCLR упадёт с "Failed to create CoreCLR, HRESULT: 0x80070008"
+    # ============================================================
+    env["DOTNET_GCHeapHardLimit"] = format(CS_HEAP_LIMIT, "X")
+
+    # Снижаем нагрузку на старт рантайма
     env["DOTNET_TieredCompilation"] = "1"
     env["DOTNET_TieredPGO"] = "1"
     env["DOTNET_ReadyToRun"] = "1"
-    env["DOTNET_GCgen0size"] = "10000000"   # 16 МБ gen0
+    # gen0 в HEX: 8 МБ = 8388608 = 0x800000
+    env["DOTNET_GCgen0size"] = "800000"
 
     out_dir = tmp_path / "out"
     no_restore = (tmp_path / "obj" / "project.assets.json").exists()
