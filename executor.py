@@ -1,7 +1,8 @@
 # ============================================================
-# Запуск и проверка решений (Python + C#) с кэшем сборки
+# Запуск и проверка решений (Python + C#) с песочницей и кэшем
 # ============================================================
 import os
+import resource
 import shutil
 import subprocess
 import sys
@@ -16,15 +17,59 @@ _CS_TEMPLATE = _CS_CACHE / "template"
 
 
 # ============================================================
+# Ограничения песочницы (Python)
+# ============================================================
+SANDBOX_MEMORY = 128 * 1024 * 1024   # 128 МБ
+SANDBOX_CPU_SEC = 10
+SANDBOX_FILE_SIZE = 5 * 1024 * 1024  # 5 МБ
+SANDBOX_MAX_PROCS = 20
+SANDBOX_TIMEOUT = 10                 # общий таймаут subprocess
+
+
+def _limit_resources():
+    """Ограничения для дочернего процесса (Linux)."""
+    try:
+        resource.setrlimit(resource.RLIMIT_AS,
+                           (SANDBOX_MEMORY, SANDBOX_MEMORY))
+    except Exception:
+        pass
+    try:
+        resource.setrlimit(resource.RLIMIT_CPU,
+                           (SANDBOX_CPU_SEC, SANDBOX_CPU_SEC + 2))
+    except Exception:
+        pass
+    try:
+        resource.setrlimit(resource.RLIMIT_FSIZE,
+                           (SANDBOX_FILE_SIZE, SANDBOX_FILE_SIZE))
+    except Exception:
+        pass
+    try:
+        resource.setrlimit(resource.RLIMIT_NPROC,
+                           (SANDBOX_MAX_PROCS, SANDBOX_MAX_PROCS))
+    except Exception:
+        pass
+    try:
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    except Exception:
+        pass
+
+
+def _preexec_fn():
+    """Возвращает preexec_fn только на Linux/macOS."""
+    if sys.platform == "win32":
+        return None
+    return _limit_resources
+
+
+# ============================================================
 # Перевод ошибок
 # ============================================================
 ERROR_HINTS = [
-    # ---------- Python ----------
     ("SyntaxError",         "💡 Синтаксическая ошибка. Проверьте скобки, кавычки и двоеточия."),
     ("IndentationError",    "💡 Ошибка отступов. В Python отступы важны."),
     ("TabError",            "💡 Смешаны табы и пробелы. Используйте 4 пробела."),
     ("NameError",           "💡 Переменная не определена. Проверьте написание имён."),
-    ("TypeError",           "💡 Несовместимые типы. Нельзя сложить строку и число."),
+    ("TypeError",           "💡 Несовместимые типы."),
     ("ValueError",          "💡 Неверное значение. Возможно, input() вернул не число."),
     ("IndexError",          "💡 Выход за границы списка или строки."),
     ("KeyError",            "💡 Ключ не найден в словаре."),
@@ -33,7 +78,8 @@ ERROR_HINTS = [
     ("RecursionError",      "💡 Слишком глубокая рекурсия — нет базового случая?"),
     ("ModuleNotFoundError", "💡 Модуль не найден. Проверьте import."),
     ("AttributeError",      "💡 У объекта нет такого атрибута."),
-    # ---------- C# ----------
+    ("MemoryError",         "💡 Не хватило памяти. Возможно, создан слишком большой массив."),
+    ("OSError",             "💡 Системная ошибка. Возможно, превышены ограничения."),
     ("CS1002",  "💡 C#: пропущена точка с запятой ;"),
     ("CS1513",  "💡 C#: пропущена закрывающая скобка }"),
     ("CS1001",  "💡 C#: ожидался идентификатор."),
@@ -41,8 +87,7 @@ ERROR_HINTS = [
     ("CS0029",  "💡 C#: несовместимые типы."),
     ("CS0266",  "💡 C#: нужно явное приведение (int) или (double)."),
     ("CS0165",  "💡 C#: используется неинициализированная переменная."),
-    ("NETSDK1045", "💡 C#: установленная версия .NET SDK не поддерживает target framework. "
-                   "Проверьте `dotnet --list-sdks`."),
+    ("NETSDK1045", "💡 C#: установленная версия .NET SDK не поддерживает target framework."),
     ("System.FormatException", "💡 C#: не удалось разобрать число."),
     ("System.NullReferenceException", "💡 C#: обращение к null."),
     ("System.IndexOutOfRangeException", "💡 C#: выход за границы массива."),
@@ -74,15 +119,9 @@ def find_python() -> str:
 
 
 def detect_dotnet():
-    """Определяет путь к dotnet и наиболее совместимый target framework.
-
-    Берём МИНИМАЛЬНУЮ мажорную версию SDK — это гарантирует,
-    что проект соберётся и запустится на любой установленной версии рантайма.
-    """
     global _dotnet_cache
     if _dotnet_cache is not None:
         return _dotnet_cache
-
     exe = shutil.which("dotnet") or shutil.which("dotnet.exe")
     if not exe:
         _dotnet_cache = False
@@ -100,14 +139,13 @@ def detect_dotnet():
             parts = line.split()
             if parts and parts[0]:
                 try:
-                    major = int(parts[0].split(".")[0])
-                    versions.append(major)
+                    versions.append(int(parts[0].split(".")[0]))
                 except (ValueError, IndexError):
                     pass
 
         if versions:
             versions = sorted(set(versions))
-            major = min(versions)  # ← минимальная, а не максимальная
+            major = min(versions)
             if major >= 9:
                 framework = f"net{major}.0"
             elif major == 8:
@@ -116,8 +154,6 @@ def detect_dotnet():
                 framework = "net7.0"
             elif major == 6:
                 framework = "net6.0"
-            else:
-                framework = "net8.0"
             print(f"[✓] .NET SDK versions: {versions}, target = {framework}")
         else:
             print("[!] .NET найден, но SDK не установлен (только runtime)")
@@ -129,12 +165,10 @@ def detect_dotnet():
 
 
 def prepare_csharp_template():
-    """Один раз собирает шаблон — при следующих запусках переиспользует obj/."""
     info = detect_dotnet()
     if not info:
         return False
 
-    # Если шаблон есть, но target framework не совпадает — пересобираем
     csproj = _CS_TEMPLATE / "App.csproj"
     if csproj.exists():
         try:
@@ -190,7 +224,7 @@ def prepare_csharp_template():
 
 
 # ============================================================
-# Нормализация вывода
+# Нормализация
 # ============================================================
 def _normalize(s):
     if s is None:
@@ -244,7 +278,7 @@ def run_code(code, task, language, custom_tests=None):
 
 
 # ============================================================
-# Python
+# Python (с sandbox)
 # ============================================================
 def _run_python(code, tmp_path, test_cases):
     try:
@@ -257,6 +291,12 @@ def _run_python(code, tmp_path, test_cases):
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
+    # Отключаем сброс core-дампов
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    # Ограничение на количество потоков (защита от fork-бомб)
+    env["OMP_NUM_THREADS"] = "1"
+
+    preexec = _preexec_fn()
 
     results = []
     for i, tc in enumerate(test_cases, 1):
@@ -264,28 +304,43 @@ def _run_python(code, tmp_path, test_cases):
         stdin = tc.get("input", "")
         expected = tc.get("expected", "")
         try:
-            r = subprocess.run(
-                [python_exe, "-X", "utf8", "main.py"],
+            kwargs = dict(
                 cwd=str(tmp_path), input=stdin, capture_output=True,
-                text=True, timeout=10, encoding="utf-8",
+                text=True, timeout=SANDBOX_TIMEOUT, encoding="utf-8",
                 errors="replace", env=env,
             )
+            if preexec:
+                kwargs["preexec_fn"] = preexec
+
+            r = subprocess.run([python_exe, "-X", "utf8", "main.py"], **kwargs)
+
             if r.returncode != 0:
+                err = r.stderr or ""
+                # Расшифровка kill-сигналов
+                if r.returncode == -9 or r.returncode == 137:
+                    err = "⏱ Программа убита — превышен лимит памяти или CPU."
+                elif r.returncode == -24 or r.returncode == 152:
+                    err = "⏱ Программа убита — превышен лимит CPU."
                 results.append({
                     "name": name, "passed": False,
-                    "message": "Ошибка:\n" + humanize_error(r.stderr or "", "python")[:600],
+                    "message": "Ошибка:\n" + humanize_error(err, "python")[:600],
                 })
                 continue
+
             passed = _normalize(r.stdout) == _normalize(expected)
             msg = "OK" if passed else (
                 f"Вход: {stdin!r}\nОжидалось: {expected!r}\nПолучено:  {(r.stdout or '').strip()!r}"
             )
             results.append({"name": name, "passed": passed, "message": msg})
         except subprocess.TimeoutExpired:
-            results.append({"name": name, "passed": False,
-                            "message": "⏱ Превышено время (10 сек)."})
+            results.append({
+                "name": name, "passed": False,
+                "message": "⏱ Превышено время выполнения (10 сек).\n"
+                           "💡 Возможно, бесконечный цикл.",
+            })
         except Exception as e:
-            results.append({"name": name, "passed": False, "message": f"Ошибка: {e}"})
+            results.append({"name": name, "passed": False,
+                            "message": f"Ошибка: {e}"})
     return results, None
 
 
@@ -298,14 +353,12 @@ def _run_csharp(code, tmp_path, test_cases):
         return None, {"error": "Не найден .NET SDK. Установите .NET 8: "
                                "sudo apt install dotnet-sdk-8.0"}
 
-    # Копируем шаблон (если есть) — тогда obj/ уже готов
     if _CS_TEMPLATE.exists():
         try:
             shutil.copytree(_CS_TEMPLATE, tmp_path, dirs_exist_ok=True)
         except Exception:
             pass
 
-    # Если шаблона нет — создаём csproj вручную
     csproj_path = tmp_path / "App.csproj"
     if not csproj_path.exists():
         csproj_path.write_text(
@@ -353,21 +406,30 @@ def _run_csharp(code, tmp_path, test_cases):
     if not exe_path.exists():
         return None, {"error": f"Не найден {exe_path}"}
 
+    preexec = _preexec_fn()
     results = []
     for i, tc in enumerate(test_cases, 1):
         name = tc.get("_label") or f"Тест {i}"
         stdin = tc.get("input", "")
         expected = tc.get("expected", "")
         try:
-            r = subprocess.run(
-                [str(exe_path)], cwd=str(tmp_path), input=stdin,
-                capture_output=True, text=True, timeout=10,
-                encoding="utf-8", errors="replace", env=env,
+            kwargs = dict(
+                cwd=str(tmp_path), input=stdin, capture_output=True,
+                text=True, timeout=10, encoding="utf-8",
+                errors="replace", env=env,
             )
+            if preexec:
+                kwargs["preexec_fn"] = preexec
+
+            r = subprocess.run([str(exe_path)], **kwargs)
+
             if r.returncode != 0:
+                err = r.stderr or ""
+                if r.returncode in (-9, 137):
+                    err = "⏱ Программа убита — превышен лимит памяти."
                 results.append({
                     "name": name, "passed": False,
-                    "message": "Ошибка:\n" + humanize_error(r.stderr or "", "csharp")[:600],
+                    "message": "Ошибка:\n" + humanize_error(err, "csharp")[:600],
                 })
                 continue
             passed = _normalize(r.stdout) == _normalize(expected)

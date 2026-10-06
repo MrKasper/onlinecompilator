@@ -1,5 +1,5 @@
 # ============================================================
-# Flask-приложение: онлайн-компилятор
+# Flask-приложение: онлайн-компилятор (с защитой от спама)
 # ============================================================
 import csv
 import io
@@ -12,7 +12,7 @@ from pathlib import Path
 
 from flask import (
     Flask, request, jsonify, send_from_directory,
-    session, redirect, render_template_string, abort,
+    session, redirect, render_template_string,
 )
 
 from tasks import TASKS
@@ -25,13 +25,21 @@ from db import (
 from executor import (
     run_code, detect_dotnet, find_python, prepare_csharp_template,
 )
+from security import (
+    check_rate_limit, check_min_interval, check_code_size, check_blacklist,
+    log_suspicious, MAX_REQUEST_SIZE,
+    RATE_STUDENT_MAX, RATE_STUDENT_WINDOW, RATE_IP_MAX, RATE_IP_WINDOW,
+    acquire_cs_slot, release_cs_slot, cs_queue_info,
+    acquire_py_slot, release_py_slot, py_queue_info,
+)
 
 
 HERE = Path(__file__).parent
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Kexibqltym15w")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "teacher2026")
 
 app = Flask(__name__, static_folder=None)
 app.secret_key = os.environ.get("SECRET_KEY", secrets.token_hex(16))
+app.config["MAX_CONTENT_LENGTH"] = MAX_REQUEST_SIZE
 
 
 # ============================================================
@@ -123,17 +131,33 @@ def api_task(task_id):
     task = next((t for t in TASKS if t["id"] == task_id), None)
     if not task:
         return jsonify({"error": "Задача не найдена"}), 404
-    # не отдаём студенту solution
     public = {k: v for k, v in task.items() if k != "solution"}
     return jsonify(public)
 
 
 @app.route("/api/tasks/<task_id>/solution")
 def api_task_solution(task_id):
-    """Разбор решения — только для авторизованных или по параметру force для студента после успеха."""
+    """Разбор решения — только после успешного решения."""
     task = next((t for t in TASKS if t["id"] == task_id), None)
     if not task:
         return jsonify({"error": "Задача не найдена"}), 404
+
+    student = request.args.get("student", "").strip()
+    if not student:
+        return jsonify({"error": "Укажите имя (параметр student)"}), 400
+
+    # Проверяем, что студент решил задачу
+    subs = load_submissions()
+    solved = any(
+        s["student"] == student and s["task_id"] == task_id
+        and s["passed"] == s["total"]
+        for s in subs
+    )
+    if not solved:
+        return jsonify({
+            "error": "🔒 Разбор доступен только после успешного решения задачи."
+        }), 403
+
     sol = task.get("solution")
     if not sol:
         return jsonify({"error": "Разбор для этой задачи пока не добавлен"}), 404
@@ -150,7 +174,7 @@ def api_students():
 
 
 # ============================================================
-# API — запуск
+# API — запуск (с защитой)
 # ============================================================
 @app.route("/api/run", methods=["POST"])
 def api_run():
@@ -162,14 +186,84 @@ def api_run():
     group_name = (data.get("group") or "").strip()
     custom_tests = data.get("custom_tests") or []
 
+    ip = (request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+          or request.remote_addr or "unknown")
+
+    # ---------- 1. Минимальный интервал (2 сек) ----------
+    ok, wait = check_min_interval(student)
+    if not ok:
+        return jsonify({
+            "error": f"⏱ Подождите {wait} сек. перед следующим запуском.",
+            "tests": []
+        }), 429
+
+    # ---------- 2. Rate limit на студента ----------
+    if not check_rate_limit(f"student:{student}", RATE_STUDENT_MAX, RATE_STUDENT_WINDOW):
+        print(f"[RATE] {student} · {ip} — превышен лимит студента")
+        return jsonify({
+            "error": f"⏱ Слишком много запусков. Не более {RATE_STUDENT_MAX} в минуту.",
+            "tests": []
+        }), 429
+
+    # ---------- 3. Rate limit на IP ----------
+    if not check_rate_limit(f"ip:{ip}", RATE_IP_MAX, RATE_IP_WINDOW):
+        print(f"[RATE] {ip} — превышен лимит IP")
+        return jsonify({
+            "error": f"⏱ Слишком много запросов с вашего IP. "
+                     f"Не более {RATE_IP_MAX} в минуту.",
+            "tests": []
+        }), 429
+
+    # ---------- 4. Размер кода ----------
+    size_err = check_code_size(code)
+    if size_err:
+        return jsonify({"error": size_err, "tests": []}), 413
+
+    # ---------- 5. Чёрный список ----------
+    danger = check_blacklist(code)
+    if danger:
+        print(f"[BLACKLIST] {student} · {ip} · {danger[:80]}")
+        return jsonify({"error": danger, "tests": []}), 400
+
+    # Логируем подозрительное (не блокируем)
+    sus = log_suspicious(code)
+    if sus:
+        print(f"[SUSPICIOUS] {student} · {ip} · {sus}")
+
+    # ---------- 6. Проверка задачи ----------
     task = next((t for t in TASKS if t["id"] == task_id), None)
     if not task:
-        return jsonify({"error": f"Задача '{task_id}' не найдена", "tests": []})
+        return jsonify({"error": f"Задача '{task_id}' не найдена", "tests": []}), 404
 
-    print(f"[RUN]  {student!r} ({group_name or '—'}) · {task_id!r} · {language!r}")
-    result = run_code(code, task, language, custom_tests=custom_tests)
+    # ---------- 7. Очередь на C# / Python ----------
+    if language == "csharp":
+        acquired, position = acquire_cs_slot()
+        if not acquired:
+            return jsonify({
+                "error": "⏱ Очередь на C# переполнена. Попробуйте через минуту.",
+                "tests": []
+            }), 503
+        print(f"[RUN-CS]  {student!r} · {task_id!r} (в очереди был #{position})")
+        try:
+            result = run_code(code, task, language, custom_tests=custom_tests)
+        finally:
+            release_cs_slot()
+    elif language == "python":
+        acquired, position = acquire_py_slot()
+        if not acquired:
+            return jsonify({
+                "error": "⏱ Очередь на Python переполнена. Попробуйте через минуту.",
+                "tests": []
+            }), 503
+        print(f"[RUN-PY]  {student!r} · {task_id!r} (в очереди был #{position})")
+        try:
+            result = run_code(code, task, language, custom_tests=custom_tests)
+        finally:
+            release_py_slot()
+    else:
+        return jsonify({"error": f"Язык '{language}' не поддерживается", "tests": []}), 400
 
-    # Всегда пишем в историю
+    # ---------- 8. Сохранение результата ----------
     add_attempt(
         student=student, group_name=group_name,
         task_id=task_id, language=language, code=code,
@@ -177,7 +271,6 @@ def api_run():
         tests=result.get("tests", []), error=result.get("error"),
     )
 
-    # Полное решение → сохраняем лучший + автооценка
     if (not result.get("error") and result.get("total", 0) > 0
             and result.get("passed") == result.get("total")):
         add_submission(
@@ -186,7 +279,6 @@ def api_run():
             passed=result["passed"], total=result["total"],
             tests=result["tests"],
         )
-        # Автооценка (если учитель ещё не поставил вручную)
         ag = auto_grade(result["passed"], result["total"])
         existing = next(
             (g for g in load_grades()
@@ -231,7 +323,6 @@ def api_attempts():
 
 @app.route("/api/attempts/me")
 def api_attempts_me():
-    """Для студента — его собственные попытки без пароля."""
     student = request.args.get("student", "").strip()
     if not student:
         return jsonify([])
@@ -323,12 +414,27 @@ def api_debug():
         "submissions": len(load_submissions()),
         "attempts": len(load_attempts(limit=10**9)),
         "grades": len(load_grades()),
+        "queue_cs": cs_queue_info(),
+        "queue_py": py_queue_info(),
+        "limits": {
+            "rate_student": f"{RATE_STUDENT_MAX}/{RATE_STUDENT_WINDOW}s",
+            "rate_ip": f"{RATE_IP_MAX}/{RATE_IP_WINDOW}s",
+            "max_code_size": MAX_REQUEST_SIZE,
+        }
     })
 
 
 # ============================================================
-# Ошибки
+# Обработка ошибок
 # ============================================================
+@app.errorhandler(413)
+def too_large(e):
+    return jsonify({
+        "error": f"⚠ Слишком большой запрос. Максимум {MAX_REQUEST_SIZE:,} байт.",
+        "tests": []
+    }), 413
+
+
 @app.errorhandler(500)
 def err500(e):
     traceback.print_exc()
@@ -347,12 +453,28 @@ startup()
 
 
 if __name__ == "__main__":
+    import socket
+
+    PORT = int(os.environ.get("PORT", 5050))
+    HOST = os.environ.get("HOST", "0.0.0.0")
+
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        local_ip = s.getsockname()[0]
+        s.close()
+    except Exception:
+        local_ip = "127.0.0.1"
+
     print(f"\n🐍 Python: {sys.executable}")
     dn = detect_dotnet()
     if dn:
         print(f"🔷 .NET:   {dn['exe']} ({dn['framework']})")
-    print(f"\n🚀 Сервер:  http://localhost:8000")
-    print(f"👨‍🏫 Админка: http://localhost:8000/admin")
-    print(f"🔐 Пароль:  {ADMIN_PASSWORD}")
-    print(f"📚 Задач:   {len(TASKS)}\n")
-    app.run(host="0.0.0.0", port=8000, debug=False)
+    print(f"\n🚀 Студенты: http://{local_ip}:{PORT}")
+    print(f"👨‍🏫 Учитель:  http://{local_ip}:{PORT}/admin")
+    print(f"🔐 Пароль:   {ADMIN_PASSWORD}")
+    print(f"📚 Задач:    {len(TASKS)}")
+    print(f"🛡  Защита:   rate {RATE_STUDENT_MAX}/мин (студент), "
+          f"{RATE_IP_MAX}/мин (IP), макс. код {MAX_REQUEST_SIZE:,} байт\n")
+
+    app.run(host=HOST, port=PORT, debug=False, threaded=True)
