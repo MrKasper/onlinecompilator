@@ -24,6 +24,7 @@
     padding: 7px 16px; border: 1px solid #d1d5db; background: #fff;
     color: #4b5563; border-radius: 6px; cursor: pointer;
     font-family: inherit; font-size: 12.5px; font-weight: 600;
+    position: relative;
   }
   .header nav button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
   .header nav button:hover:not(.active) { border-color: #9ca3af; }
@@ -93,8 +94,6 @@
   .pill.grade { background: #dbeafe; color: #1e40af; }
   .pill.auto { background: #ede9fe; color: #5b21b6; }
   .pill.danger { background: #fee2e2; color: #991b1b; }
-  .pill.warn { background: #fef3c7; color: #92400e; }
-  .pill.info { background: #dbeafe; color: #1e40af; }
 
   .btn-view, .btn-del, .btn-unblock {
     padding: 5px 12px; font-size: 11.5px; border-radius: 5px;
@@ -110,7 +109,6 @@
 
   .empty { text-align: center; padding: 60px 20px; color: #9ca3af; }
 
-  /* Статистика */
   .stats-grid {
     display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
     gap: 14px;
@@ -128,7 +126,6 @@
   .stat-row .ok { color: #059669; }
   .stat-row .warn { color: #d97706; }
 
-  /* Подозрительные */
   .susp-card {
     background: #fff; border-radius: 10px; padding: 18px;
     border: 1px solid #e1e4e8; margin-bottom: 14px;
@@ -177,7 +174,6 @@
     max-height: 100px; overflow-y: auto; border: 1px solid #e5e7eb;
   }
 
-  /* Модалка */
   .modal-bg {
     position: fixed; inset: 0; background: rgba(15,23,42,0.55);
     display: none; align-items: center; justify-content: center; z-index: 100;
@@ -265,7 +261,8 @@
     <button id="tabBtnSolutions" class="active" onclick="switchTab('solutions')">📋 Решения</button>
     <button id="tabBtnStats" onclick="switchTab('stats')">📊 Статистика</button>
     <button id="tabBtnSuspicious" onclick="switchTab('suspicious')">
-      🕵 Подозрительные <span id="suspBadge" style="display:none;background:#dc2626;color:#fff;
+      🕵 Подозрительные
+      <span id="suspBadge" style="display:none;background:#dc2626;color:#fff;
       padding:1px 7px;border-radius:10px;font-size:10px;margin-left:4px;font-weight:700"></span>
     </button>
     <a href="/">← К компилятору</a>
@@ -322,6 +319,7 @@
       <div class="empty">Загрузка...</div>
     </div>
   </div>
+
 </div>
 
 <div class="modal-bg" id="modalBg" onclick="closeModal(event)">
@@ -335,6 +333,43 @@
 </div>
 
 <script>
+  // ============================================================
+  // ГЛОБАЛЬНАЯ ОБЁРТКА fetch — ловит 401 и редиректит на логин
+  // ============================================================
+  const _origFetch = window.fetch;
+  window.fetch = async function(url, options) {
+    const res = await _origFetch(url, options);
+    if (res.status === 401 && typeof url === 'string' && url.startsWith('/api/')) {
+      // Сессия истекла — уходим на логин
+      window.location.href = '/admin/login';
+      throw new Error('Сессия истекла');
+    }
+    return res;
+  };
+
+  // ---------- Безопасный JSON ----------
+  async function safeJson(res) {
+    const ct = res.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) {
+      const text = await res.text();
+      console.error('Ожидался JSON, получено:', ct, text.slice(0, 200));
+      throw new Error('Сервер вернул не JSON (' + res.status + '). Возможно, сервер не перезапущен.');
+    }
+    return res.json();
+  }
+
+  // ---------- Проверка на объект-ошибку ----------
+  function isErrorObject(data) {
+    return data
+      && typeof data === 'object'
+      && !Array.isArray(data)
+      && 'error' in data
+      && Object.keys(data).length <= 2;
+  }
+
+  // ============================================================
+  // Состояние
+  // ============================================================
   let items = [];
   let gradesMap = {};
   let taskTitles = {};
@@ -352,6 +387,7 @@
   };
 
   function reasonLabel(reason) {
+    if (!reason) return '—';
     for (const key in REASON_LABELS) {
       if (reason.startsWith(key)) return REASON_LABELS[key];
     }
@@ -359,6 +395,7 @@
   }
 
   function reasonClass(reason) {
+    if (!reason) return '';
     for (const key in REASON_LABELS) {
       if (reason.startsWith(key)) return 'reason-' + key;
     }
@@ -370,13 +407,22 @@
   // ============================================================
   async function loadRefs() {
     try {
-      const [tasks, grades, submissions] = await Promise.all([
-        fetch('/api/tasks').then(r => r.json()),
-        fetch('/api/grades').then(r => r.json()),
-        fetch('/api/submissions').then(r => r.json()),
+      const [tasksRes, gradesRes, subsRes] = await Promise.all([
+        fetch('/api/tasks'),
+        fetch('/api/grades'),
+        fetch('/api/submissions'),
       ]);
+      const tasks = await safeJson(tasksRes);
+      const grades = await safeJson(gradesRes);
+      const submissions = await safeJson(subsRes);
+
+      if (isErrorObject(tasks) || !Array.isArray(tasks)) {
+        throw new Error((tasks && tasks.error) || 'Не удалось загрузить задачи');
+      }
+
       tasks.forEach(t => { taskTitles[t.id] = t.title; });
       const sel = document.getElementById('filterTask');
+      sel.innerHTML = '<option value="">Все задачи</option>';
       tasks.forEach(t => {
         const opt = document.createElement('option');
         opt.value = t.id; opt.textContent = t.title;
@@ -385,26 +431,34 @@
 
       const students = new Set();
       const groups = new Set();
-      submissions.forEach(s => {
-        if (s.student) students.add(s.student);
-        if (s.group_name) groups.add(s.group_name);
-      });
+      if (Array.isArray(submissions)) {
+        submissions.forEach(s => {
+          if (s.student) students.add(s.student);
+          if (s.group_name) groups.add(s.group_name);
+        });
+      }
       const ssel = document.getElementById('filterStudent');
+      ssel.innerHTML = '<option value="">Все студенты</option>';
       [...students].sort().forEach(n => {
         const opt = document.createElement('option');
         opt.value = n; opt.textContent = n;
         ssel.appendChild(opt);
       });
       const gsel = document.getElementById('filterGroup');
+      gsel.innerHTML = '<option value="">Все группы</option>';
       [...groups].sort().forEach(n => {
         const opt = document.createElement('option');
         opt.value = n; opt.textContent = n;
         gsel.appendChild(opt);
       });
 
-      grades.forEach(g => gradesMap[g.student + '::' + g.task_id] = g);
+      gradesMap = {};
+      if (Array.isArray(grades)) {
+        grades.forEach(g => gradesMap[g.student + '::' + g.task_id] = g);
+      }
     } catch (e) {
-      console.error(e);
+      console.error('[loadRefs]', e);
+      throw e;
     }
   }
 
@@ -414,11 +468,18 @@
   async function reload() {
     try {
       const res = await fetch('/api/submissions');
-      items = await res.json();
+      const data = await safeJson(res);
+      if (isErrorObject(data)) {
+        document.getElementById('tableWrap').innerHTML =
+          '<div class="empty" style="color:#dc2626">⚠ ' + esc(data.error) + '</div>';
+        return;
+      }
+      items = Array.isArray(data) ? data : [];
       render();
     } catch (e) {
+      console.error('[reload]', e);
       document.getElementById('tableWrap').innerHTML =
-        '<div class="empty" style="color:#dc2626">Ошибка загрузки: ' + e.message + '</div>';
+        '<div class="empty" style="color:#dc2626">Ошибка: ' + esc(e.message) + '</div>';
     }
   }
 
@@ -456,6 +517,7 @@
 
     if (!filtered.length) {
       wrap.innerHTML = '<div class="empty">Нет сохранённых решений</div>';
+      wrap._filtered = [];
       return;
     }
 
@@ -472,32 +534,31 @@
           gradeHtml = '<span class="pill auto">🤖 ' + g.auto_grade + '</span>';
         }
       }
-      return `
-        <tr>
-          <td class="student">${esc(it.student || '—')}</td>
-          <td class="group">${esc(it.group_name || '—')}</td>
-          <td class="task">${esc(taskTitles[it.task_id] || it.task_id)}</td>
-          <td class="lang">${it.language === 'csharp' ? 'C#' : 'Python'}</td>
-          <td class="score ${cls}">${it.passed} / ${it.total}</td>
-          <td><span class="pill ${cls}">${label}</span> ${gradeHtml}</td>
-          <td class="time">${esc(it.timestamp || '')}</td>
-          <td class="actions">
-            <button class="btn-view" onclick="showCode(${idx})">Показать</button>
-            <button class="btn-del" onclick="deleteEntry(${idx})">🗑</button>
-          </td>
-        </tr>`;
+      return '<tr>' +
+        '<td class="student">' + esc(it.student || '—') + '</td>' +
+        '<td class="group">' + esc(it.group_name || '—') + '</td>' +
+        '<td class="task">' + esc(taskTitles[it.task_id] || it.task_id) + '</td>' +
+        '<td class="lang">' + (it.language === 'csharp' ? 'C#' : 'Python') + '</td>' +
+        '<td class="score ' + cls + '">' + it.passed + ' / ' + it.total + '</td>' +
+        '<td><span class="pill ' + cls + '">' + label + '</span> ' + gradeHtml + '</td>' +
+        '<td class="time">' + esc(it.timestamp || '') + '</td>' +
+        '<td class="actions">' +
+          '<button class="btn-view" onclick="showCode(' + idx + ')">Показать</button>' +
+          '<button class="btn-del" onclick="deleteEntry(' + idx + ')">🗑</button>' +
+        '</td>' +
+      '</tr>';
     }).join('');
 
-    wrap.innerHTML = `
-      <table>
-        <thead>
-          <tr>
-            <th>Студент</th><th>Группа</th><th>Задача</th><th>Язык</th>
-            <th>Результат</th><th>Статус</th><th>Время</th><th></th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>`;
+    wrap.innerHTML =
+      '<table>' +
+        '<thead>' +
+          '<tr>' +
+            '<th>Студент</th><th>Группа</th><th>Задача</th><th>Язык</th>' +
+            '<th>Результат</th><th>Статус</th><th>Время</th><th></th>' +
+          '</tr>' +
+        '</thead>' +
+        '<tbody>' + rows + '</tbody>' +
+      '</table>';
     wrap._filtered = filtered;
   }
 
@@ -516,9 +577,10 @@
         body: JSON.stringify({
           student: it.student, task_id: it.task_id, language: it.language
         })
-      }).then(r => r.json());
-      if (res.ok) { reload(); }
-      else { alert(res.error || 'Ошибка удаления'); }
+      });
+      const data = await safeJson(res);
+      if (data.error) { alert('Ошибка: ' + data.error); return; }
+      if (data.ok) { reload(); }
     } catch (e) { alert('Ошибка: ' + e.message); }
   }
 
@@ -529,43 +591,46 @@
     currentModalItem = it;
 
     document.getElementById('modalTitle').textContent =
-      `${it.student} · ${taskTitles[it.task_id] || it.task_id}`;
+      it.student + ' · ' + (taskTitles[it.task_id] || it.task_id);
 
     const testsHtml = (it.tests || []).map(t =>
-      `<div class="${t.passed ? 'ok' : 'fail'}">${t.passed ? '✓' : '✕'} ${esc(t.name)}</div>`
+      '<div class="' + (t.passed ? 'ok' : 'fail') + '">' +
+        (t.passed ? '✓' : '✕') + ' ' + esc(t.name) +
+      '</div>'
     ).join('');
 
     const g = gradesMap[it.student + '::' + it.task_id] || {};
     const gradeOptions = ['', '2', '3', '4', '5'].map(v =>
-      `<option value="${v}" ${String(g.grade || '') === v ? 'selected' : ''}>${v || '—'}</option>`
+      '<option value="' + v + '" ' + (String(g.grade || '') === v ? 'selected' : '') + '>' +
+        (v || '—') + '</option>'
     ).join('');
 
     const autoHtml = g.auto_grade != null
-      ? `<span style="color:#5b21b6;font-size:12px;margin-left:8px">🤖 автооценка: ${g.auto_grade}</span>`
+      ? '<span style="color:#5b21b6;font-size:12px;margin-left:8px">🤖 автооценка: ' +
+        g.auto_grade + '</span>'
       : '';
 
-    document.getElementById('modalBody').innerHTML = `
-      <div class="modal-meta">
-        Язык: <b>${it.language === 'csharp' ? 'C#' : 'Python'}</b> ·
-        Группа: <b>${esc(it.group_name || '—')}</b> ·
-        Результат: <b>${it.passed} / ${it.total}</b> ·
-        Время: <b>${esc(it.timestamp)}</b>
-      </div>
-      <pre>${esc(it.code || '')}</pre>
-      <div class="modal-tests">${testsHtml}</div>
+    document.getElementById('modalBody').innerHTML =
+      '<div class="modal-meta">' +
+        'Язык: <b>' + (it.language === 'csharp' ? 'C#' : 'Python') + '</b> · ' +
+        'Группа: <b>' + esc(it.group_name || '—') + '</b> · ' +
+        'Результат: <b>' + it.passed + ' / ' + it.total + '</b> · ' +
+        'Время: <b>' + esc(it.timestamp) + '</b>' +
+      '</div>' +
+      '<pre>' + esc(it.code || '') + '</pre>' +
+      '<div class="modal-tests">' + testsHtml + '</div>' +
+      '<div class="grade-box">' +
+        '<h4>🎓 Оценка от учителя ' + autoHtml + '</h4>' +
+        '<div class="grade-row">' +
+          '<select id="gradeSelect">' + gradeOptions + '</select>' +
+          '<input id="gradeComment" type="text" placeholder="Комментарий..." value="' +
+            esc(g.comment || '') + '">' +
+          '<button class="btn-save-grade" onclick="saveGrade()">Сохранить</button>' +
+          '<button class="btn-del-grade" onclick="removeGrade()">Сбросить</button>' +
+          '<span class="grade-saved" id="gradeSaved"></span>' +
+        '</div>' +
+      '</div>';
 
-      <div class="grade-box">
-        <h4>🎓 Оценка от учителя ${autoHtml}</h4>
-        <div class="grade-row">
-          <select id="gradeSelect">${gradeOptions}</select>
-          <input id="gradeComment" type="text" placeholder="Комментарий..." 
-                 value="${esc(g.comment || '')}">
-          <button class="btn-save-grade" onclick="saveGrade()">Сохранить</button>
-          <button class="btn-del-grade" onclick="removeGrade()">Сбросить</button>
-          <span class="grade-saved" id="gradeSaved"></span>
-        </div>
-      </div>
-    `;
     document.getElementById('modalBg').classList.add('show');
   }
 
@@ -585,19 +650,17 @@
           grade: grade === '' ? null : grade,
           comment: comment,
         })
-      }).then(r => r.json());
+      });
+      const data = await safeJson(res);
+      if (data.error) { alert('Ошибка: ' + data.error); return; }
 
-      if (res.ok) {
-        await refreshGrades();
-        document.getElementById('gradeSaved').textContent = '✓ Сохранено';
-        setTimeout(() => {
-          const el = document.getElementById('gradeSaved');
-          if (el) el.textContent = '';
-        }, 2500);
-        render();
-      } else {
-        alert(res.error || 'Ошибка сохранения');
+      await refreshGrades();
+      const el = document.getElementById('gradeSaved');
+      if (el) {
+        el.textContent = '✓ Сохранено';
+        setTimeout(() => { if (el) el.textContent = ''; }, 2500);
       }
+      render();
     } catch (e) {
       alert('Ошибка: ' + e.message);
     }
@@ -608,25 +671,32 @@
     if (!it) return;
     if (!confirm('Сбросить оценку по этой задаче?')) return;
     try {
-      await fetch('/api/grade', {
+      const res = await fetch('/api/grade', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ student: it.student, task_id: it.task_id })
       });
+      const data = await safeJson(res);
+      if (data.error) { alert('Ошибка: ' + data.error); return; }
+
       await refreshGrades();
-      document.getElementById('gradeSaved').textContent = '✓ Сброшено';
-      setTimeout(() => {
-        const el = document.getElementById('gradeSaved');
-        if (el) el.textContent = '';
-      }, 2500);
+      const el = document.getElementById('gradeSaved');
+      if (el) {
+        el.textContent = '✓ Сброшено';
+        setTimeout(() => { if (el) el.textContent = ''; }, 2500);
+      }
       render();
-    } catch (e) { alert(e.message); }
+    } catch (e) { alert('Ошибка: ' + e.message); }
   }
 
   async function refreshGrades() {
-    const gr = await fetch('/api/grades').then(r => r.json());
-    gradesMap = {};
-    gr.forEach(g => gradesMap[g.student + '::' + g.task_id] = g);
+    try {
+      const res = await fetch('/api/grades');
+      const gr = await safeJson(res);
+      if (!Array.isArray(gr)) return;
+      gradesMap = {};
+      gr.forEach(g => gradesMap[g.student + '::' + g.task_id] = g);
+    } catch (e) { console.error(e); }
   }
 
   function closeModal(e) {
@@ -636,9 +706,10 @@
 
   async function doBackup() {
     try {
-      const r = await fetch('/api/backup', {method: 'POST'}).then(x => x.json());
+      const res = await fetch('/api/backup', { method: 'POST' });
+      const r = await safeJson(res);
       alert(r.ok ? 'Копия сохранена:\n' + r.path : (r.error || 'Ошибка'));
-    } catch (e) { alert(e.message); }
+    } catch (e) { alert('Ошибка: ' + e.message); }
   }
 
   // ============================================================
@@ -646,8 +717,13 @@
   // ============================================================
   async function loadStats() {
     try {
-      const stats = await fetch('/api/stats').then(r => r.json());
+      const res = await fetch('/api/stats');
+      const stats = await safeJson(res);
       const wrap = document.getElementById('statsWrap');
+      if (isErrorObject(stats) || !stats || typeof stats !== 'object') {
+        wrap.innerHTML = '<div class="empty" style="color:#dc2626">⚠ Ошибка загрузки</div>';
+        return;
+      }
       const names = Object.keys(stats).sort((a, b) => stats[b].solved - stats[a].solved);
       if (!names.length) {
         wrap.innerHTML = '<div class="empty">Пока нет данных</div>';
@@ -667,8 +743,10 @@
         return '<div class="stat-card">' +
           '<h4>' + esc(name) + '</h4>' +
           (gr ? '<div class="group-label">Группа: ' + esc(gr) + '</div>' : '') +
-          '<div class="stat-row"><span>Решено задач</span><span class="ok">' + st.solved + '</span></div>' +
-          '<div class="stat-row"><span>Всего попыток</span><span>' + st.attempts + '</span></div>' +
+          '<div class="stat-row"><span>Решено задач</span><span class="ok">' +
+            st.solved + '</span></div>' +
+          '<div class="stat-row"><span>Всего попыток</span><span>' +
+            st.attempts + '</span></div>' +
           '<div class="stat-row"><span>Python / C#</span><span>' +
             (st.by_lang.python || 0) + ' / ' + (st.by_lang.csharp || 0) + '</span></div>' +
           '<div class="stat-row"><span>Средняя оценка</span><span class="' +
@@ -681,7 +759,7 @@
       }).join('');
     } catch (e) {
       document.getElementById('statsWrap').innerHTML =
-        '<div class="empty" style="color:#dc2626">Ошибка: ' + e.message + '</div>';
+        '<div class="empty" style="color:#dc2626">Ошибка: ' + esc(e.message) + '</div>';
     }
   }
 
@@ -689,13 +767,32 @@
   // Подозрительные
   // ============================================================
   async function loadSuspicious() {
-    try {
-      const data = await fetch('/api/suspicious').then(r => r.json());
-      const wrap = document.getElementById('suspWrap');
-      const ips = Object.keys(data);
+    const wrap = document.getElementById('suspWrap');
+    const badge = document.getElementById('suspBadge');
+    const statsEl = document.getElementById('suspStats');
 
-      // Бейдж в шапке
-      const badge = document.getElementById('suspBadge');
+    try {
+      const res = await fetch('/api/suspicious');
+      const data = await safeJson(res);
+
+      if (isErrorObject(data)) {
+        wrap.innerHTML = '<div class="empty" style="color:#dc2626">⚠ ' +
+          esc(data.error) + '</div>';
+        badge.style.display = 'none';
+        statsEl.textContent = '';
+        return;
+      }
+
+      if (!data || typeof data !== 'object' || Array.isArray(data)) {
+        wrap.innerHTML = '<div class="empty" style="color:#dc2626">Некорректный ответ сервера</div>';
+        badge.style.display = 'none';
+        statsEl.textContent = '';
+        return;
+      }
+
+      // Оставляем только те ключи, где значение — массив
+      const ips = Object.keys(data).filter(ip => Array.isArray(data[ip]));
+
       if (ips.length) {
         badge.style.display = 'inline-block';
         badge.textContent = ips.length;
@@ -703,33 +800,37 @@
         badge.style.display = 'none';
       }
 
-      document.getElementById('suspStats').innerHTML =
-        `Подозрительных IP: <b class="${ips.length ? 'danger' : ''}">${ips.length}</b>`;
+      statsEl.innerHTML =
+        'Подозрительных IP: <b class="' + (ips.length ? 'danger' : '') + '">' +
+        ips.length + '</b>';
 
       if (!ips.length) {
         wrap.innerHTML = '<div class="empty">🎉 Подозрительных IP нет</div>';
         return;
       }
 
-      // Сортируем по времени последнего события (свежие сверху)
+      // Сортировка по времени последнего события
       ips.sort((a, b) => {
-        const ta = data[a][data[a].length - 1]?.time || '';
-        const tb = data[b][data[b].length - 1]?.time || '';
+        const evA = data[a] || [];
+        const evB = data[b] || [];
+        const ta = evA.length ? (evA[evA.length - 1].time || '') : '';
+        const tb = evB.length ? (evB[evB.length - 1].time || '') : '';
         return tb.localeCompare(ta);
       });
 
       wrap.innerHTML = ips.map(ip => {
-        const events = data[ip];
-        const eventsHtml = events.slice().reverse().map(ev => `
-          <div class="event ${reasonClass(ev.reason || '')}">
-            <div class="event-head">
-              <span class="event-student">${esc(ev.student || '—')}</span>
-              <span class="event-reason">${esc(reasonLabel(ev.reason || ''))}</span>
-              <span class="event-time">${esc(ev.time || '')}</span>
-            </div>
-            ${ev.code ? '<div class="event-code">' + esc(ev.code) + '</div>' : ''}
-          </div>
-        `).join('');
+        const events = data[ip] || [];
+        const eventsHtml = events.slice().reverse().map(ev => {
+          const reason = ev.reason || '';
+          return '<div class="event ' + reasonClass(reason) + '">' +
+            '<div class="event-head">' +
+              '<span class="event-student">' + esc(ev.student || '—') + '</span>' +
+              '<span class="event-reason">' + esc(reasonLabel(reason)) + '</span>' +
+              '<span class="event-time">' + esc(ev.time || '') + '</span>' +
+            '</div>' +
+            (ev.code ? '<div class="event-code">' + esc(ev.code) + '</div>' : '') +
+          '</div>';
+        }).join('');
 
         return '<div class="susp-card">' +
           '<div class="susp-head">' +
@@ -743,9 +844,13 @@
           eventsHtml +
         '</div>';
       }).join('');
+
     } catch (e) {
-      document.getElementById('suspWrap').innerHTML =
-        '<div class="empty" style="color:#dc2626">Ошибка: ' + e.message + '</div>';
+      console.error('[loadSuspicious]', e);
+      wrap.innerHTML = '<div class="empty" style="color:#dc2626">Ошибка: ' +
+        esc(e.message) + '</div>';
+      badge.style.display = 'none';
+      statsEl.textContent = '';
     }
   }
 
@@ -760,17 +865,21 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ip: ip })
-      }).then(r => r.json());
+      });
+      const data = await safeJson(res);
 
-      if (res.ok) {
-        const r = res.result;
+      if (data.error) {
+        alert('Ошибка: ' + data.error);
+        return;
+      }
+
+      if (data.ok) {
+        const r = data.result || {};
         alert('✅ IP ' + ip + ' разблокирован\n\n' +
-              'Снято rate-limit: ' + r.cleared_rate + '\n' +
-              'Снято записей имён: ' + r.cleared_name + '\n' +
-              'Удалено событий: ' + r.cleared_suspicious);
+              'Снято rate-limit: ' + (r.cleared_rate || 0) + '\n' +
+              'Снято записей имён: ' + (r.cleared_name || 0) + '\n' +
+              'Удалено событий: ' + (r.cleared_suspicious || 0));
         loadSuspicious();
-      } else {
-        alert(res.error || 'Ошибка разблокировки');
       }
     } catch (e) {
       alert('Ошибка: ' + e.message);
@@ -778,10 +887,12 @@
   }
 
   async function clearAllSuspicious() {
-    if (!confirm('Очистить ВСЕ подозрительные IP?\n\n' +
-                 '⚠️ Это также снимет все блокировки!')) return;
+    if (!confirm('Очистить ВСЕ подозрительные записи?\n\n' +
+                 '⚠️ Это удалит записи, но НЕ снимет блокировки!')) return;
     try {
-      await fetch('/api/suspicious', { method: 'DELETE' });
+      const res = await fetch('/api/suspicious', { method: 'DELETE' });
+      const data = await safeJson(res);
+      if (data.error) { alert('Ошибка: ' + data.error); return; }
       loadSuspicious();
     } catch (e) {
       alert('Ошибка: ' + e.message);
@@ -807,13 +918,19 @@
       c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   }
 
+  // ============================================================
+  // Фильтры
+  // ============================================================
   ['searchStudent', 'filterStudent', 'filterGroup', 'filterTask', 'filterLang', 'filterStatus']
     .forEach(id => {
-      document.getElementById(id).addEventListener('input', render);
-      document.getElementById(id).addEventListener('change', render);
+      const el = document.getElementById(id);
+      el.addEventListener('input', render);
+      el.addEventListener('change', render);
     });
 
+  // ============================================================
   // Автообновление
+  // ============================================================
   setInterval(() => {
     if (document.getElementById('tabSolutions').style.display !== 'none') {
       reload();
@@ -823,18 +940,34 @@
     }
   }, 15000);
 
-  // Старт — загружаем бейдж с количеством подозрительных сразу
-  loadRefs().then(() => {
-    reload();
-    fetch('/api/suspicious').then(r => r.json()).then(data => {
-      const n = Object.keys(data).length;
-      if (n > 0) {
-        const badge = document.getElementById('suspBadge');
-        badge.style.display = 'inline-block';
-        badge.textContent = n;
+  // ============================================================
+  // Старт
+  // ============================================================
+  (async function init() {
+    try {
+      await loadRefs();
+      await reload();
+
+      // Тихо проверяем бейдж подозрительных
+      try {
+        const res = await fetch('/api/suspicious');
+        const data = await safeJson(res);
+        if (isErrorObject(data) || !data || typeof data !== 'object') return;
+        const ips = Object.keys(data).filter(ip => Array.isArray(data[ip]));
+        if (ips.length > 0) {
+          const badge = document.getElementById('suspBadge');
+          badge.style.display = 'inline-block';
+          badge.textContent = ips.length;
+        }
+      } catch (e) {
+        // Игнорируем — это необязательная проверка
       }
-    }).catch(() => {});
-  });
+    } catch (e) {
+      console.error('[init]', e);
+      document.getElementById('tableWrap').innerHTML =
+        '<div class="empty" style="color:#dc2626">Ошибка загрузки: ' + esc(e.message) + '</div>';
+    }
+  })();
 </script>
 </body>
 </html>
