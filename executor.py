@@ -28,10 +28,10 @@ def _env_int(name: str, default: int) -> int:
 
 # Лимит памяти: по умолчанию 512 МБ (хватает всем задачам, но не даёт
 # создать массив на несколько гигабайт)
-SANDBOX_MEMORY = _env_int("SANDBOX_MEMORY", 512) * 1024 * 1024
+SANDBOX_MEMORY = _env_int("SANDBOX_MEMORY", 2048) * 1024 * 1024
 
 # Лимит CPU: 10 секунд
-SANDBOX_CPU_SEC = _env_int("SANDBOX_CPU_SEC", 10)
+SANDBOX_CPU_SEC = _env_int("SANDBOX_CPU_SEC", 15)
 
 # Лимит размера файла: 5 МБ
 SANDBOX_FILE_SIZE = _env_int("SANDBOX_FILE_SIZE", 5) * 1024 * 1024
