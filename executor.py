@@ -1,11 +1,16 @@
 # ============================================================
 # Запуск и проверка решений (Python + C#) с песочницей и кэшем
 #
-# Песочница использует ДВА лимита памяти:
-#   - RLIMIT_DATA — heap (brk/sbrk), мелкие аллокации
-#   - RLIMIT_AS   — всё адресное пространство, включая mmap
-#                   (Python использует mmap для больших массивов,
-#                    поэтому без RLIMIT_AS код может съесть всю RAM)
+# Особенности песочницы:
+#   Python:
+#     - RLIMIT_DATA — heap (brk/sbrk)
+#     - RLIMIT_AS   — всё адресное пространство (важно для mmap)
+#     - RLIMIT_CPU  — лимит CPU
+#
+#   C#:
+#     - RLIMIT_AS НЕЛЬЗЯ — CoreCLR резервирует 10-20 ГБ AS при старте
+#     - Используем DOTNET_GCHeapHardLimit — лимит управляемой кучи
+#     - RLIMIT_CPU  — лимит CPU
 # ============================================================
 import os
 import resource
@@ -32,76 +37,69 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-# Лимит heap-памяти (brk/sbrk): 2 ГБ
+# ---------- Python ----------
+# Heap-память (brk/sbrk)
 SANDBOX_MEMORY = _env_int("SANDBOX_MEMORY", 2048) * 1024 * 1024
-
-# Запас AS на старт Python (venv + импорты + mmap модулей)
+# Запас AS на старт Python (venv + импорты)
 SANDBOX_AS_EXTRA = _env_int("SANDBOX_AS_EXTRA", 512) * 1024 * 1024
 
-# Лимит CPU: 10 секунд
-SANDBOX_CPU_SEC = _env_int("SANDBOX_CPU_SEC", 10)
+# ---------- C# ----------
+# Лимит управляемой кучи .NET (DOTNET_GCHeapHardLimit)
+# CoreCLR НЕ ограничивается по RLIMIT_AS — используем это
+CS_HEAP_LIMIT = _env_int("CS_HEAP_LIMIT", 1024) * 1024 * 1024
 
-# Лимит размера файла: 5 МБ
+# ---------- Общие ----------
+SANDBOX_CPU_SEC = _env_int("SANDBOX_CPU_SEC", 15)
 SANDBOX_FILE_SIZE = _env_int("SANDBOX_FILE_SIZE", 5) * 1024 * 1024
-
-# Лимит числа процессов: 20
 SANDBOX_MAX_PROCS = _env_int("SANDBOX_MAX_PROCS", 20)
-
-# Общий таймаут subprocess
-SANDBOX_TIMEOUT = _env_int("SANDBOX_TIMEOUT", 10)
-
-# Отключить песочницу: SANDBOX_DISABLE=1
+SANDBOX_TIMEOUT = _env_int("SANDBOX_TIMEOUT", 15)
 SANDBOX_DISABLE = os.environ.get("SANDBOX_DISABLE", "0") == "1"
 
 
 # ============================================================
-# Лимиты ресурсов для дочернего процесса
+# Лимиты для Python
 # ============================================================
-def _limit_resources():
-    """Ограничения для дочернего процесса (Linux/macOS).
+def _limit_resources_python():
+    """Лимиты для дочернего Python.
 
-    RLIMIT_DATA — heap (brk/sbrk), маленькие объекты.
-    RLIMIT_AS   — всё адресное пространство, включая mmap.
-                  Python использует mmap для больших массивов,
-                  поэтому БЕЗ RLIMIT_AS лимит памяти не работает.
-
-    AS берём с запасом: Python в venv на старте занимает
-    ~300-400 МБ AS (импорт модулей, mmap самого интерпретатора).
+    RLIMIT_DATA — heap (brk/sbrk).
+    RLIMIT_AS   — всё адресное пространство, важно для mmap.
+                  Python использует mmap для больших массивов.
     """
     # 1. Heap — маленькие объекты
     try:
         resource.setrlimit(resource.RLIMIT_DATA,
                            (SANDBOX_MEMORY, SANDBOX_MEMORY))
     except Exception as e:
-        print(f"[sandbox] RLIMIT_DATA: {e}", flush=True)
+        print(f"[sandbox-py] RLIMIT_DATA: {e}", flush=True)
 
-    # 2. Всё адресное пространство — ГЛАВНЫЙ лимит
+    # 2. Общее адресное пространство
     as_limit = SANDBOX_MEMORY + SANDBOX_AS_EXTRA
     try:
         resource.setrlimit(resource.RLIMIT_AS, (as_limit, as_limit))
     except Exception as e:
-        print(f"[sandbox] RLIMIT_AS: {e}", flush=True)
+        print(f"[sandbox-py] RLIMIT_AS: {e}", flush=True)
 
     # 3. CPU
     try:
         resource.setrlimit(resource.RLIMIT_CPU,
                            (SANDBOX_CPU_SEC, SANDBOX_CPU_SEC + 2))
     except Exception as e:
-        print(f"[sandbox] RLIMIT_CPU: {e}", flush=True)
+        print(f"[sandbox-py] RLIMIT_CPU: {e}", flush=True)
 
     # 4. Размер файла
     try:
         resource.setrlimit(resource.RLIMIT_FSIZE,
                            (SANDBOX_FILE_SIZE, SANDBOX_FILE_SIZE))
-    except Exception as e:
-        print(f"[sandbox] RLIMIT_FSIZE: {e}", flush=True)
+    except Exception:
+        pass
 
-    # 5. Число процессов (защита от fork-бомб)
+    # 5. Число процессов
     try:
         resource.setrlimit(resource.RLIMIT_NPROC,
                            (SANDBOX_MAX_PROCS, SANDBOX_MAX_PROCS))
-    except Exception as e:
-        print(f"[sandbox] RLIMIT_NPROC: {e}", flush=True)
+    except Exception:
+        pass
 
     # 6. Без core-дампов
     try:
@@ -110,13 +108,52 @@ def _limit_resources():
         pass
 
 
-def _preexec_fn():
-    """Возвращает preexec_fn только на Linux/macOS."""
+# ============================================================
+# Лимиты для C#
+# ============================================================
+def _limit_resources_csharp():
+    """Лимиты для дочернего C#-процесса.
+
+    ВАЖНО: НЕ ставим RLIMIT_AS!
+    CoreCLR при старте резервирует 10-20 ГБ виртуального пространства
+    (GC, JIT, стеки потоков). Если поставить RLIMIT_AS, рантайм
+    падает с "Failed to create CoreCLR, HRESULT: 0x80070008".
+
+    Память ограничиваем через DOTNET_GCHeapHardLimit (env-переменная,
+    ставится в _run_csharp).
+    """
+    # 1. CPU — важно
+    try:
+        resource.setrlimit(resource.RLIMIT_CPU,
+                           (SANDBOX_CPU_SEC, SANDBOX_CPU_SEC + 2))
+    except Exception as e:
+        print(f"[sandbox-cs] RLIMIT_CPU: {e}", flush=True)
+
+    # 2. Размер файла
+    try:
+        resource.setrlimit(resource.RLIMIT_FSIZE,
+                           (SANDBOX_FILE_SIZE, SANDBOX_FILE_SIZE))
+    except Exception:
+        pass
+
+    # 3. Без core-дампов
+    try:
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    except Exception:
+        pass
+
+    # RLIMIT_AS и RLIMIT_DATA для C# НЕ ставим
+
+
+def _preexec_fn(language: str):
+    """Возвращает правильный preexec_fn для языка."""
     if sys.platform == "win32":
         return None
     if SANDBOX_DISABLE:
         return None
-    return _limit_resources
+    if language == "csharp":
+        return _limit_resources_csharp
+    return _limit_resources_python
 
 
 # ============================================================
@@ -138,6 +175,7 @@ ERROR_HINTS = [
     ("AttributeError",      "💡 У объекта нет такого атрибута."),
     ("MemoryError",         "💡 Не хватило памяти. Не создавайте слишком большие массивы."),
     ("OSError",             "💡 Системная ошибка. Возможно, превышены ограничения."),
+    # C#
     ("CS1002",  "💡 C#: пропущена точка с запятой ;"),
     ("CS1513",  "💡 C#: пропущена закрывающая скобка }"),
     ("CS1001",  "💡 C#: ожидался идентификатор."),
@@ -146,11 +184,12 @@ ERROR_HINTS = [
     ("CS0266",  "💡 C#: нужно явное приведение (int) или (double)."),
     ("CS0165",  "💡 C#: используется неинициализированная переменная."),
     ("NETSDK1045", "💡 C#: установленная версия .NET SDK не поддерживает target framework."),
-    ("System.FormatException", "💡 C#: не удалось разобрать число."),
+    ("System.FormatException", "💡 C#: не удалось разобрать число. Проверьте входные данные."),
     ("System.NullReferenceException", "💡 C#: обращение к null."),
     ("System.IndexOutOfRangeException", "💡 C#: выход за границы массива."),
     ("System.DivideByZeroException", "💡 C#: деление на ноль."),
     ("System.OutOfMemoryException", "💡 C#: не хватило памяти."),
+    ("Failed to create CoreCLR", "💡 Не удалось запустить .NET-рантайм. Слишком жёсткие лимиты памяти."),
 ]
 
 
@@ -178,11 +217,7 @@ def find_python() -> str:
 
 
 def detect_dotnet():
-    """Определяет путь к dotnet и наиболее совместимый target framework.
-
-    Берём МИНИМАЛЬНУЮ мажорную версию SDK — гарантирует совместимость
-    с установленным рантаймом.
-    """
+    """Определяет путь к dotnet и минимальную мажорную версию SDK."""
     global _dotnet_cache
     if _dotnet_cache is not None:
         return _dotnet_cache
@@ -210,7 +245,7 @@ def detect_dotnet():
 
         if versions:
             versions = sorted(set(versions))
-            major = min(versions)  # минимальная — максимальная совместимость
+            major = min(versions)   # минимальная — максимальная совместимость
             if major >= 9:
                 framework = f"net{major}.0"
             elif major == 8:
@@ -234,7 +269,6 @@ def prepare_csharp_template():
         return False
 
     csproj = _CS_TEMPLATE / "App.csproj"
-    # Если target framework шаблона не совпадает с текущим — пересобираем
     if csproj.exists():
         try:
             content = csproj.read_text(encoding="utf-8")
@@ -280,8 +314,6 @@ def prepare_csharp_template():
         )
         if result.returncode != 0:
             print("[!] Не удалось подготовить шаблон C#", flush=True)
-            print((result.stdout or "")[-500:], flush=True)
-            print((result.stderr or "")[-500:], flush=True)
             return False
         print(f"[✓] Шаблон C# подготовлен ({info['framework']})", flush=True)
         return True
@@ -291,7 +323,7 @@ def prepare_csharp_template():
 
 
 # ============================================================
-# Нормализация вывода
+# Нормализация
 # ============================================================
 def _normalize(s):
     if s is None:
@@ -312,29 +344,33 @@ def _describe_exit(returncode: int, stderr: str, language: str) -> str:
     """Человеко-понятное описание kill-сигналов."""
     err = stderr or ""
 
-    # SIGXCPU (24) / 152 — превышен RLIMIT_CPU
-    if returncode in (-24, 152):
+    if returncode in (-24, 152):     # SIGXCPU
         return (err + f"\n\n⏱ Превышен лимит CPU ({SANDBOX_CPU_SEC} сек).\n"
                        "💡 Проверьте, нет ли бесконечного цикла.").strip()
 
-    # SIGKILL (9) / 137 — OOM или hard CPU limit
-    if returncode in (-9, 137):
-        mem_mb = SANDBOX_MEMORY // (1024 * 1024)
-        as_mb = (SANDBOX_MEMORY + SANDBOX_AS_EXTRA) // (1024 * 1024)
-        return (err + "\n\n⏱ Программа убита системой (SIGKILL).\n"
-                      f"💡 Вероятные причины:\n"
-                      f"   • Превышен лимит памяти (heap {mem_mb} МБ, "
-                      f"всего {as_mb} МБ)\n"
-                      f"   • Превышен жёсткий лимит CPU "
-                      f"({SANDBOX_CPU_SEC + 2} сек)\n"
-                      f"   • Проверьте, нет ли очень больших массивов "
-                      f"или бесконечного цикла.").strip()
+    if returncode in (-9, 137):      # SIGKILL
+        if language == "csharp":
+            mem_mb = CS_HEAP_LIMIT // (1024 * 1024)
+            return (err + "\n\n⏱ Программа убита системой (SIGKILL).\n"
+                          f"💡 Вероятные причины:\n"
+                          f"   • Превышен лимит CPU ({SANDBOX_CPU_SEC + 2} сек)\n"
+                          f"   • Превышен лимит памяти .NET "
+                          f"({mem_mb} МБ heap)\n"
+                          f"   • Проверьте, нет ли больших массивов "
+                          f"или бесконечного цикла.").strip()
+        else:
+            mem_mb = SANDBOX_MEMORY // (1024 * 1024)
+            as_mb = (SANDBOX_MEMORY + SANDBOX_AS_EXTRA) // (1024 * 1024)
+            return (err + "\n\n⏱ Программа убита системой (SIGKILL).\n"
+                          f"💡 Вероятные причины:\n"
+                          f"   • Превышен лимит памяти "
+                          f"(heap {mem_mb} МБ, AS {as_mb} МБ)\n"
+                          f"   • Превышен жёсткий лимит CPU "
+                          f"({SANDBOX_CPU_SEC + 2} сек)\n"
+                          f"   • Проверьте, нет ли очень больших массивов.").strip()
 
-    # SIGSEGV (11) / 139 — сегфолт
-    if returncode in (-11, 139):
-        return (err + "\n\n💥 Программа аварийно завершилась (SIGSEGV).\n"
-                      "💡 Возможно, переполнение стека или обращение "
-                      "к некорректному адресу.").strip()
+    if returncode in (-11, 139):     # SIGSEGV
+        return (err + "\n\n💥 Программа аварийно завершилась (SIGSEGV).").strip()
 
     return err
 
@@ -396,9 +432,9 @@ def _run_python(code, tmp_path, test_cases):
     env["PYTHONUTF8"] = "1"
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["OMP_NUM_THREADS"] = "1"
-    env["MALLOC_ARENA_MAX"] = "2"   # снижает фрагментацию glibc
+    env["MALLOC_ARENA_MAX"] = "2"
 
-    preexec = _preexec_fn()
+    preexec = _preexec_fn("python")
 
     results = []
     for i, tc in enumerate(test_cases, 1):
@@ -435,8 +471,7 @@ def _run_python(code, tmp_path, test_cases):
         except subprocess.TimeoutExpired:
             results.append({
                 "name": name, "passed": False,
-                "message": f"⏱ Превышено время выполнения ({SANDBOX_TIMEOUT} сек).\n"
-                           "💡 Возможно, бесконечный цикл или ожидание ввода.",
+                "message": f"⏱ Превышено время выполнения ({SANDBOX_TIMEOUT} сек).",
             })
         except Exception as e:
             results.append({"name": name, "passed": False,
@@ -454,7 +489,6 @@ def _run_csharp(code, tmp_path, test_cases):
         return None, {"error": "Не найден .NET SDK. Установите .NET 8: "
                                "sudo apt install dotnet-sdk-8.0"}
 
-    # Копируем шаблон (obj/, bin/, nuget-кэш) — ускоряет сборку
     if _CS_TEMPLATE.exists():
         try:
             shutil.copytree(_CS_TEMPLATE, tmp_path, dirs_exist_ok=True)
@@ -483,6 +517,14 @@ def _run_csharp(code, tmp_path, test_cases):
     env["DOTNET_NOLOGO"] = "1"
     env["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1"
 
+    # Лимит управляемой кучи .NET — вместо RLIMIT_AS
+    env["DOTNET_GCHeapHardLimit"] = str(CS_HEAP_LIMIT)
+    # Уменьшаем нагрузку на старт рантайма
+    env["DOTNET_TieredCompilation"] = "1"
+    env["DOTNET_TieredPGO"] = "1"
+    env["DOTNET_ReadyToRun"] = "1"
+    env["DOTNET_GCgen0size"] = "10000000"   # 16 МБ gen0
+
     out_dir = tmp_path / "out"
     no_restore = (tmp_path / "obj" / "project.assets.json").exists()
 
@@ -509,7 +551,7 @@ def _run_csharp(code, tmp_path, test_cases):
     if not exe_path.exists():
         return None, {"error": f"Не найден скомпилированный файл: {exe_path}"}
 
-    preexec = _preexec_fn()
+    preexec = _preexec_fn("csharp")
     results = []
     for i, tc in enumerate(test_cases, 1):
         name = tc.get("_label") or f"Тест {i}"
