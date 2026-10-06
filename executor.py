@@ -19,6 +19,7 @@ _CS_TEMPLATE = _CS_CACHE / "template"
 # Перевод ошибок
 # ============================================================
 ERROR_HINTS = [
+    # ---------- Python ----------
     ("SyntaxError",         "💡 Синтаксическая ошибка. Проверьте скобки, кавычки и двоеточия."),
     ("IndentationError",    "💡 Ошибка отступов. В Python отступы важны."),
     ("TabError",            "💡 Смешаны табы и пробелы. Используйте 4 пробела."),
@@ -32,6 +33,7 @@ ERROR_HINTS = [
     ("RecursionError",      "💡 Слишком глубокая рекурсия — нет базового случая?"),
     ("ModuleNotFoundError", "💡 Модуль не найден. Проверьте import."),
     ("AttributeError",      "💡 У объекта нет такого атрибута."),
+    # ---------- C# ----------
     ("CS1002",  "💡 C#: пропущена точка с запятой ;"),
     ("CS1513",  "💡 C#: пропущена закрывающая скобка }"),
     ("CS1001",  "💡 C#: ожидался идентификатор."),
@@ -39,6 +41,8 @@ ERROR_HINTS = [
     ("CS0029",  "💡 C#: несовместимые типы."),
     ("CS0266",  "💡 C#: нужно явное приведение (int) или (double)."),
     ("CS0165",  "💡 C#: используется неинициализированная переменная."),
+    ("NETSDK1045", "💡 C#: установленная версия .NET SDK не поддерживает target framework. "
+                   "Проверьте `dotnet --list-sdks`."),
     ("System.FormatException", "💡 C#: не удалось разобрать число."),
     ("System.NullReferenceException", "💡 C#: обращение к null."),
     ("System.IndexOutOfRangeException", "💡 C#: выход за границы массива."),
@@ -70,28 +74,53 @@ def find_python() -> str:
 
 
 def detect_dotnet():
+    """Определяет путь к dotnet и наиболее совместимый target framework.
+
+    Берём МИНИМАЛЬНУЮ мажорную версию SDK — это гарантирует,
+    что проект соберётся и запустится на любой установленной версии рантайма.
+    """
     global _dotnet_cache
     if _dotnet_cache is not None:
         return _dotnet_cache
+
     exe = shutil.which("dotnet") or shutil.which("dotnet.exe")
     if not exe:
         _dotnet_cache = False
         return None
 
     framework = "net8.0"
+    versions = []
     try:
-        r = subprocess.run([exe, "--list-sdks"], capture_output=True, text=True,
-                           timeout=15, encoding="utf-8", errors="replace")
-        majors = set()
+        r = subprocess.run(
+            [exe, "--list-sdks"],
+            capture_output=True, text=True, timeout=15,
+            encoding="utf-8", errors="replace",
+        )
         for line in (r.stdout or "").splitlines():
             parts = line.split()
-            if parts:
-                try: majors.add(int(parts[0].split(".")[0]))
-                except ValueError: pass
-        if 9 in majors:   framework = "net9.0"
-        elif 8 in majors: framework = "net8.0"
-        elif 7 in majors: framework = "net7.0"
-        elif 6 in majors: framework = "net6.0"
+            if parts and parts[0]:
+                try:
+                    major = int(parts[0].split(".")[0])
+                    versions.append(major)
+                except (ValueError, IndexError):
+                    pass
+
+        if versions:
+            versions = sorted(set(versions))
+            major = min(versions)  # ← минимальная, а не максимальная
+            if major >= 9:
+                framework = f"net{major}.0"
+            elif major == 8:
+                framework = "net8.0"
+            elif major == 7:
+                framework = "net7.0"
+            elif major == 6:
+                framework = "net6.0"
+            else:
+                framework = "net8.0"
+            print(f"[✓] .NET SDK versions: {versions}, target = {framework}")
+        else:
+            print("[!] .NET найден, но SDK не установлен (только runtime)")
     except Exception as e:
         print(f"[!] Ошибка определения .NET: {e}")
 
@@ -104,10 +133,21 @@ def prepare_csharp_template():
     info = detect_dotnet()
     if not info:
         return False
+
+    # Если шаблон есть, но target framework не совпадает — пересобираем
+    csproj = _CS_TEMPLATE / "App.csproj"
+    if csproj.exists():
+        try:
+            content = csproj.read_text(encoding="utf-8")
+            if f"<TargetFramework>{info['framework']}</TargetFramework>" not in content:
+                print(f"[!] Шаблон C# устарел — пересобираю под {info['framework']}")
+                shutil.rmtree(_CS_TEMPLATE, ignore_errors=True)
+        except Exception:
+            pass
+
     _CS_CACHE.mkdir(exist_ok=True)
     _CS_TEMPLATE.mkdir(exist_ok=True)
 
-    csproj = _CS_TEMPLATE / "App.csproj"
     if not csproj.exists():
         csproj.write_text(
             '<Project Sdk="Microsoft.NET.Sdk">\n'
@@ -122,7 +162,7 @@ def prepare_csharp_template():
             '</Project>\n',
             encoding="utf-8",
         )
-    ( _CS_TEMPLATE / "Program.cs").write_text(
+    (_CS_TEMPLATE / "Program.cs").write_text(
         "class Program { static void Main() { } }", encoding="utf-8"
     )
 
@@ -130,22 +170,27 @@ def prepare_csharp_template():
     env["NUGET_PACKAGES"] = str(_CS_CACHE / "nuget")
     env["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1"
     env["DOTNET_NOLOGO"] = "1"
+    env["DOTNET_SKIP_FIRST_TIME_EXPERIENCE"] = "1"
 
     try:
-        subprocess.run(
+        result = subprocess.run(
             [info["exe"], "build", "-c", "Release", "--nologo"],
             cwd=str(_CS_TEMPLATE), capture_output=True, text=True,
             timeout=180, encoding="utf-8", errors="replace", env=env,
         )
-        print("[✓] Шаблон C# подготовлен (кэш NuGet готов)")
+        if result.returncode != 0:
+            print(f"[!] Не удалось подготовить шаблон C#:")
+            print((result.stdout or "") + (result.stderr or ""))
+            return False
+        print(f"[✓] Шаблон C# подготовлен ({info['framework']})")
         return True
     except Exception as e:
-        print(f"[!] Не удалось подготовить шаблон C#: {e}")
+        print(f"[!] Ошибка подготовки шаблона C#: {e}")
         return False
 
 
 # ============================================================
-# Нормализация
+# Нормализация вывода
 # ============================================================
 def _normalize(s):
     if s is None:
@@ -250,13 +295,20 @@ def _run_python(code, tmp_path, test_cases):
 def _run_csharp(code, tmp_path, test_cases):
     info = detect_dotnet()
     if not info:
-        return None, {"error": "Не найден .NET SDK. Установите .NET 8."}
+        return None, {"error": "Не найден .NET SDK. Установите .NET 8: "
+                               "sudo apt install dotnet-sdk-8.0"}
 
     # Копируем шаблон (если есть) — тогда obj/ уже готов
     if _CS_TEMPLATE.exists():
-        shutil.copytree(_CS_TEMPLATE, tmp_path, dirs_exist_ok=True)
-    else:
-        (tmp_path / "App.csproj").write_text(
+        try:
+            shutil.copytree(_CS_TEMPLATE, tmp_path, dirs_exist_ok=True)
+        except Exception:
+            pass
+
+    # Если шаблона нет — создаём csproj вручную
+    csproj_path = tmp_path / "App.csproj"
+    if not csproj_path.exists():
+        csproj_path.write_text(
             '<Project Sdk="Microsoft.NET.Sdk">\n'
             '  <PropertyGroup>\n'
             '    <OutputType>Exe</OutputType>\n'
@@ -264,7 +316,8 @@ def _run_csharp(code, tmp_path, test_cases):
             '    <Nullable>disable</Nullable>\n'
             '    <ImplicitUsings>enable</ImplicitUsings>\n'
             '  </PropertyGroup>\n'
-            '</Project>\n', encoding="utf-8"
+            '</Project>\n',
+            encoding="utf-8",
         )
 
     (tmp_path / "Program.cs").write_text(code, encoding="utf-8")
@@ -323,7 +376,8 @@ def _run_csharp(code, tmp_path, test_cases):
             )
             results.append({"name": name, "passed": passed, "message": msg})
         except subprocess.TimeoutExpired:
-            results.append({"name": name, "passed": False, "message": "⏱ Превышено время (10 сек)."})
+            results.append({"name": name, "passed": False,
+                            "message": "⏱ Превышено время (10 сек)."})
         except Exception as e:
             results.append({"name": name, "passed": False, "message": f"Ошибка: {e}"})
     return results, None
