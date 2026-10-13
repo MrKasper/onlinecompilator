@@ -27,8 +27,16 @@ except ImportError:
 
 
 _dotnet_cache = None
-_HERE = Path(__file__).parent
-_CS_CACHE = _HERE / "cs_cache"
+
+# Для .exe: папка рядом с .exe, а не temp PyInstaller.
+# Используем ту же логику, что и db.py — APP_DIR.
+try:
+    from db import APP_DIR
+    _CS_CACHE = APP_DIR / "cs_cache"
+except Exception:
+    _HERE = Path(__file__).parent
+    _CS_CACHE = _HERE / "cs_cache"
+
 _CS_TEMPLATE = _CS_CACHE / "template"
 
 

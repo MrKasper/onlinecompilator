@@ -47,7 +47,20 @@ from security import (
 
 
 HERE = Path(__file__).parent
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "teacher2026")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Kexibqltym15w")
+
+
+# ============================================================
+# UTF-8 для stdout/stderr на Windows
+# Без этого print() с эмодзи падает с UnicodeEncodeError (cp1251),
+# особенно при сборке .exe через PyInstaller.
+# ============================================================
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 
 # ============================================================
@@ -231,6 +244,23 @@ def api_task_solution(task_id):
     if not sol:
         return jsonify({"error": "Разбор для этой задачи пока не добавлен"}), 404
     return jsonify(sol)
+
+
+# ============================================================
+# API — решённые задачи студента (для галочек после перезахода)
+# ============================================================
+@app.route("/api/solved/me")
+def api_solved_me():
+    """Возвращает список решённых задач студента: ["task_id::language", ...]."""
+    student = request.args.get("student", "").strip()
+    if not student:
+        return jsonify([])
+
+    result = []
+    for s in load_submissions():
+        if s["student"] == student and s["passed"] == s["total"]:
+            result.append(f"{s['task_id']}::{s['language']}")
+    return jsonify(result)
 
 
 @app.route("/api/students")
@@ -642,13 +672,11 @@ if __name__ == "__main__":
     except Exception:
         local_ip = "127.0.0.1"
 
-    print(f"\n🐍 Python: {sys.executable}")
+    print(f"\n[PY] Python: {sys.executable}")
     dn = detect_dotnet()
     if dn:
-        print(f"🔷 .NET:   {dn['exe']} ({dn['framework']})")
-    print(f"\n🚀 Студенты: http://{local_ip}:{PORT}")
-    print(f"👨‍🏫 Учитель:  http://{local_ip}:{PORT}/admin")
-    print(f"🔐 Пароль:   {ADMIN_PASSWORD}")
-    print(f"📚 Задач:    {len(TASKS)}\n")
+        print(f"[CS] .NET:   {dn['exe']} ({dn['framework']})")
+    print(f"\n[>>] Студенты: http://{local_ip}:{PORT}")
+    print(f"[TK] Задач:    {len(TASKS)}\n")
 
     app.run(host=HOST, port=PORT, debug=False, threaded=True)

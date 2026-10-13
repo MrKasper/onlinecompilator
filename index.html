@@ -811,9 +811,31 @@
     }
   });
 
+  // ============================================================
+  // Синхронизация галочек решённых задач с сервером
+  // Чтобы после перезахода с другого ПК галочки сохранялись
+  // ============================================================
+  async function syncSolvedFromServer() {
+    const student = getStudentName();
+    if (!student) return;
+    try {
+      const res = await fetch('/api/solved/me?student=' + encodeURIComponent(student));
+      const list = await res.json();
+      if (!Array.isArray(list)) return;
+      for (const key of list) solvedSet.add(key);
+      localStorage.setItem(SOLVED_KEY, JSON.stringify([...solvedSet]));
+      renderTaskList();
+    } catch (e) {
+      console.error('[syncSolved]', e);
+    }
+  }
+
   initSolved();
   initName();
-  loadTaskList();
+  loadTaskList().then(syncSolvedFromServer);
+
+  // При смене имени — пересинхронизировать галочки
+  nameInput.addEventListener('change', syncSolvedFromServer);
 </script>
 </body>
 </html>

@@ -937,7 +937,7 @@ TASKS = [
         "test_cases": [
             {"input": "65 10 5", "expected": "30 20 15"},
             {"input": "79 26 16", "expected": "49 23 7"},
-            {"input": "30 5 3", "expected": "12 7 4"},
+            {"input": "23 5 3", "expected": "12 7 4"},
         ],
     },
     # --------- 32 ---------
