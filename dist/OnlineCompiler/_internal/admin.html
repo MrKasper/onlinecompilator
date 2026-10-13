@@ -60,11 +60,14 @@
     background: #fff; color: #4b5563; border: 1px solid #d1d5db;
   }
   .controls .btn.secondary:hover { color: #1f2937; border-color: #9ca3af; background: #f9fafb; }
+  .controls .btn.success { background: #10b981; }
+  .controls .btn.success:hover { background: #059669; }
   .controls .btn.danger { background: #dc2626; }
   .controls .btn.danger:hover { background: #b91c1c; }
   .controls .stats { margin-left: auto; color: #6b7280; font-size: 12.5px; }
   .controls .stats b { color: #059669; }
   .controls .stats b.danger { color: #dc2626; }
+  .controls .stats b.warn { color: #d97706; }
 
   table {
     width: 100%; border-collapse: collapse; background: #fff;
@@ -86,6 +89,7 @@
   td.score.bad { color: #dc2626; }
   td.time { color: #9ca3af; font-size: 11.5px; }
   td.actions { text-align: right; white-space: nowrap; }
+  td.grade-cell { white-space: nowrap; }
 
   .pill { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; }
   .pill.ok { background: #d1fae5; color: #065f46; }
@@ -94,6 +98,28 @@
   .pill.grade { background: #dbeafe; color: #1e40af; }
   .pill.auto { background: #ede9fe; color: #5b21b6; }
   .pill.danger { background: #fee2e2; color: #991b1b; }
+  .pill.ai-danger { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+  .pill.ai-warn { background: #fef3c7; color: #92400e; border: 1px solid #fcd34d; }
+
+  /* ---- Быстрые кнопки оценки ---- */
+  .quick-grades {
+    display: inline-flex; gap: 2px; margin-left: 4px;
+    vertical-align: middle;
+  }
+  .btn-quick {
+    width: 22px; height: 22px;
+    padding: 0; border-radius: 4px;
+    border: 1px solid #d1d5db;
+    background: #fff; color: #6b7280;
+    font-family: inherit; font-weight: 700; font-size: 11px;
+    cursor: pointer; line-height: 1;
+    transition: all 0.1s;
+  }
+  .btn-quick:hover { background: #2563eb; color: #fff; border-color: #2563eb; }
+  .btn-quick.g5:hover { background: #059669; border-color: #059669; }
+  .btn-quick.g4:hover { background: #0891b2; border-color: #0891b2; }
+  .btn-quick.g3:hover { background: #d97706; border-color: #d97706; }
+  .btn-quick.g2:hover { background: #dc2626; border-color: #dc2626; }
 
   .btn-view, .btn-del, .btn-unblock {
     padding: 5px 12px; font-size: 11.5px; border-radius: 5px;
@@ -237,6 +263,58 @@
   }
   .btn-del-grade:hover { background: #fef2f2; }
   .grade-saved { color: #059669; font-size: 12px; margin-left: 8px; font-weight: 600; }
+
+  /* ---- Кнопки быстрой оценки в модалке ---- */
+  .quick-grade-row {
+    display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap;
+  }
+  .btn-accept {
+    padding: 7px 14px; background: #10b981; color: #fff;
+    border: none; border-radius: 6px; cursor: pointer;
+    font-family: inherit; font-weight: 600; font-size: 12.5px;
+  }
+  .btn-accept:hover { background: #059669; }
+  .btn-quick-modal {
+    padding: 7px 16px; background: #fff; color: #4b5563;
+    border: 1px solid #d1d5db; border-radius: 6px;
+    cursor: pointer; font-family: inherit; font-weight: 600; font-size: 12.5px;
+    min-width: 42px;
+  }
+  .btn-quick-modal:hover { border-color: #2563eb; color: #2563eb; background: #eff6ff; }
+  .btn-quick-modal.g5:hover { border-color: #059669; color: #059669; background: #f0fdf4; }
+  .btn-quick-modal.g4:hover { border-color: #0891b2; color: #0891b2; background: #ecfeff; }
+  .btn-quick-modal.g3:hover { border-color: #d97706; color: #d97706; background: #fffbeb; }
+  .btn-quick-modal.g2:hover { border-color: #dc2626; color: #dc2626; background: #fef2f2; }
+  .kbd-hint { color: #9ca3af; font-size: 11px; margin-left: 8px; }
+
+  /* ---- ИИ-отчёт ---- */
+  .ai-report {
+    margin-top: 16px; padding: 14px 16px;
+    background: #fef2f2; border: 1px solid #fecaca;
+    border-radius: 8px;
+  }
+  .ai-report.warn { background: #fffbeb; border-color: #fde68a; }
+  .ai-report.ok { background: #f0fdf4; border-color: #bbf7d0; }
+  .ai-report h4 { margin-bottom: 8px; font-size: 13px; color: #111827; }
+  .ai-report ul { margin-left: 20px; margin-top: 6px; }
+  .ai-report li { padding: 3px 0; font-size: 12.5px; color: #4b5563; }
+  .ai-report .score { font-weight: 700; font-family: monospace; margin-left: 6px; }
+
+  /* ---- Toast-уведомления ---- */
+  .toast {
+    position: fixed; bottom: 20px; right: 20px;
+    background: #111827; color: #fff;
+    padding: 12px 20px; border-radius: 8px;
+    font-size: 13px; font-weight: 500;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+    opacity: 0; transform: translateY(20px);
+    transition: all 0.3s;
+    z-index: 200;
+    pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: translateY(0); }
+  .toast.ok { background: #059669; }
+  .toast.err { background: #dc2626; }
 </style>
 </head>
 <body>
@@ -275,10 +353,14 @@
         <option value="">Все статусы</option>
         <option value="ok">Только решённые</option>
         <option value="partial">Только частично</option>
-        <option value="graded">Только с оценкой</option>
+        <option value="ungraded">⏳ Ждут оценки</option>
+        <option value="graded">🎓 С оценкой</option>
+        <option value="ai">🚨 Только с ИИ</option>
       </select>
       <button class="btn secondary" onclick="reload()">↻ Обновить</button>
+      <button class="btn success" onclick="acceptAllAutoGrades()">✅ Принять автооценки</button>
       <button class="btn secondary" onclick="recalcAutoGrades()">🔄 Пересчитать автооценки</button>
+      <button class="btn secondary" onclick="checkAllAI()">🔍 Проверить ИИ</button>
       <button class="btn secondary" onclick="doBackup()">💾 Резервная копия</button>
       <a class="btn" href="/api/export.csv" download>⬇ Экспорт CSV</a>
       <span class="stats" id="stats"></span>
@@ -319,9 +401,11 @@
   </div>
 </div>
 
+<div class="toast" id="toast"></div>
+
 <script>
   // ============================================================
-  // Обёртка fetch — ловит 401 и редиректит на логин
+  // Обёртка fetch
   // ============================================================
   const _origFetch = window.fetch;
   window.fetch = async function(url, options) {
@@ -338,7 +422,7 @@
     if (!ct.includes('application/json')) {
       const text = await res.text();
       console.error('Ожидался JSON, получено:', ct, text.slice(0, 200));
-      throw new Error('Сервер вернул не JSON (' + res.status + '). Возможно, сервер не перезапущен.');
+      throw new Error('Сервер вернул не JSON (' + res.status + ').');
     }
     return res.json();
   }
@@ -349,6 +433,20 @@
       && !Array.isArray(data)
       && 'error' in data
       && Object.keys(data).length <= 2;
+  }
+
+  // ============================================================
+  // Toast
+  // ============================================================
+  let toastTimer = null;
+  function toast(msg, kind = '') {
+    const el = document.getElementById('toast');
+    el.textContent = msg;
+    el.className = 'toast show ' + kind;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      el.classList.remove('show');
+    }, 2500);
   }
 
   // ============================================================
@@ -495,9 +593,18 @@
       const g = gradesMap[it.student + '::' + it.task_id];
       if (fst === 'ok' && it.passed !== it.total) return false;
       if (fst === 'partial' && it.passed === it.total) return false;
+      if (fst === 'ungraded') {
+        // ждут оценки = есть автооценка, но нет ручной
+        const hasAuto = g && g.auto_grade != null;
+        const hasManual = g && g.grade != null;
+        if (!hasAuto || hasManual) return false;
+      }
       if (fst === 'graded') {
         const val = g && (g.grade != null || g.auto_grade != null);
         if (!val) return false;
+      }
+      if (fst === 'ai') {
+        if ((it.ai_score || 0) < 6) return false;
       }
       return true;
     }).sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
@@ -506,9 +613,21 @@
   function render() {
     const filtered = getFiltered();
     const wrap = document.getElementById('tableWrap');
+
+    // Счётчики
     const totalOk = items.filter(i => i.passed === i.total).length;
+    const totalAI = items.filter(i => (i.ai_score || 0) >= 6).length;
+    let ungradedCount = 0;
+    for (const it of items) {
+      const g = gradesMap[it.student + '::' + it.task_id];
+      if (g && g.auto_grade != null && g.grade == null) ungradedCount++;
+    }
+
     document.getElementById('stats').innerHTML =
-      `Всего: <b>${items.length}</b> · решённых: <b>${totalOk}</b> · показано: <b>${filtered.length}</b>`;
+      `Всего: <b>${items.length}</b> · решённых: <b>${totalOk}</b> · ` +
+      `⏳ ждут оценки: <b class="${ungradedCount ? 'warn' : ''}">${ungradedCount}</b> · ` +
+      `🚨 ИИ: <b class="${totalAI ? 'danger' : ''}">${totalAI}</b> · ` +
+      `показано: <b>${filtered.length}</b>`;
 
     if (!filtered.length) {
       wrap.innerHTML = '<div class="empty">Нет сохранённых решений</div>';
@@ -521,24 +640,52 @@
       const cls = ok ? 'ok' : (it.passed > 0 ? 'partial' : 'bad');
       const label = ok ? 'решено' : (it.passed > 0 ? 'частично' : 'не решено');
       const g = gradesMap[it.student + '::' + it.task_id];
+
+      // ---- Оценка: ручная, авто или пусто ----
       let gradeHtml = '';
-      if (g) {
-        if (g.grade != null) {
-          gradeHtml = '<span class="pill grade">🎓 ' + g.grade + '</span>';
-        } else if (g.auto_grade != null) {
-          const extra = g.auto_grade_attempts != null
-            ? ' (' + g.auto_grade_attempts + ' поп.)'
-            : '';
-          gradeHtml = '<span class="pill auto">🤖 ' + g.auto_grade + extra + '</span>';
-        }
+      const hasManual = g && g.grade != null;
+      const hasAuto = g && g.auto_grade != null;
+
+      if (hasManual) {
+        gradeHtml = '<span class="pill grade">🎓 ' + g.grade + '</span>';
+      } else if (hasAuto) {
+        const extra = g.auto_grade_attempts != null
+          ? ' (' + g.auto_grade_attempts + ' поп.)'
+          : '';
+        gradeHtml = '<span class="pill auto">🤖 ' + g.auto_grade + extra + '</span>';
+        // Быстрые кнопки: 5/4/3/2 прямо в таблице
+        gradeHtml +=
+          '<span class="quick-grades">' +
+            '<button class="btn-quick g5" onclick="event.stopPropagation(); quickGrade(' +
+              idx + ', 5)" title="Поставить 5">5</button>' +
+            '<button class="btn-quick g4" onclick="event.stopPropagation(); quickGrade(' +
+              idx + ', 4)" title="Поставить 4">4</button>' +
+            '<button class="btn-quick g3" onclick="event.stopPropagation(); quickGrade(' +
+              idx + ', 3)" title="Поставить 3">3</button>' +
+            '<button class="btn-quick g2" onclick="event.stopPropagation(); quickGrade(' +
+              idx + ', 2)" title="Поставить 2">2</button>' +
+          '</span>';
       }
+
+      // ---- ИИ-детектор ----
+      const aiScore = it.ai_score || 0;
+      let aiHtml = '';
+      if (aiScore >= 6) {
+        aiHtml = '<span class="pill ai-danger" title="Возможно, решено ИИ">🚨 ИИ ' +
+                 aiScore + '</span>';
+      } else if (aiScore >= 3) {
+        aiHtml = '<span class="pill ai-warn" title="Подозрительно">⚠ ' +
+                 aiScore + '</span>';
+      }
+
       return '<tr>' +
         '<td class="student">' + esc(it.student || '—') + '</td>' +
         '<td class="group">' + esc(it.group_name || '—') + '</td>' +
         '<td class="task">' + esc(taskTitles[it.task_id] || it.task_id) + '</td>' +
         '<td class="lang">' + (it.language === 'csharp' ? 'C#' : 'Python') + '</td>' +
         '<td class="score ' + cls + '">' + it.passed + ' / ' + it.total + '</td>' +
-        '<td><span class="pill ' + cls + '">' + label + '</span> ' + gradeHtml + '</td>' +
+        '<td class="grade-cell"><span class="pill ' + cls + '">' + label + '</span> ' +
+          gradeHtml + ' ' + aiHtml + '</td>' +
         '<td class="time">' + esc(it.timestamp || '') + '</td>' +
         '<td class="actions">' +
           '<button class="btn-view" onclick="showCode(' + idx + ')">Показать</button>' +
@@ -560,6 +707,75 @@
     wrap._filtered = filtered;
   }
 
+  // ============================================================
+  // Быстрое выставление оценки (из таблицы)
+  // ============================================================
+  async function quickGrade(idx, value) {
+    const filtered = document.getElementById('tableWrap')._filtered || [];
+    const it = filtered[idx];
+    if (!it) return;
+
+    const g = gradesMap[it.student + '::' + it.task_id] || {};
+    try {
+      const res = await fetch('/api/grade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          student: it.student,
+          task_id: it.task_id,
+          grade: value,
+          comment: g.comment || '',
+        })
+      });
+      const data = await safeJson(res);
+      if (data.error) { toast('Ошибка: ' + data.error, 'err'); return; }
+
+      // Локально обновляем
+      const key = it.student + '::' + it.task_id;
+      gradesMap[key] = Object.assign({}, g, { grade: value });
+      render();
+      toast('✓ Оценка ' + value + ' выставлена: ' + it.student, 'ok');
+    } catch (e) {
+      toast('Ошибка: ' + e.message, 'err');
+    }
+  }
+
+  // ============================================================
+  // Массовое принятие автооценок
+  // ============================================================
+  async function acceptAllAutoGrades() {
+    // Посчитаем, сколько будет затронуто
+    let count = 0;
+    for (const it of items) {
+      const g = gradesMap[it.student + '::' + it.task_id];
+      if (g && g.auto_grade != null && g.grade == null) count++;
+    }
+
+    if (count === 0) {
+      toast('Нет решений, ожидающих подтверждения', '');
+      return;
+    }
+
+    if (!confirm(
+      'Принять автооценки как ручные?\n\n' +
+      'Будет затронуто решений: ' + count + '\n\n' +
+      'Это установит ручную оценку = автооценке.\n' +
+      'Ручные оценки, выставленные ранее, НЕ изменятся.'
+    )) return;
+
+    try {
+      const res = await fetch('/api/accept-auto-grades', { method: 'POST' });
+      const data = await safeJson(res);
+      if (data.error) { toast('Ошибка: ' + data.error, 'err'); return; }
+
+      toast('✅ Принято: ' + (data.accepted || 0) +
+            ' · пропущено: ' + (data.skipped || 0), 'ok');
+      await reload();
+    } catch (e) {
+      toast('Ошибка: ' + e.message, 'err');
+    }
+  }
+
   async function deleteEntry(idx) {
     const filtered = document.getElementById('tableWrap')._filtered || [];
     const it = filtered[idx];
@@ -577,9 +793,9 @@
         })
       });
       const data = await safeJson(res);
-      if (data.error) { alert('Ошибка: ' + data.error); return; }
+      if (data.error) { toast('Ошибка: ' + data.error, 'err'); return; }
       if (data.ok) { reload(); }
-    } catch (e) { alert('Ошибка: ' + e.message); }
+    } catch (e) { toast('Ошибка: ' + e.message, 'err'); }
   }
 
   function showCode(idx) {
@@ -603,13 +819,56 @@
         (v || '—') + '</option>'
     ).join('');
 
+    // ---- Автооценка + кнопка «Принять как N» ----
     let autoHtml = '';
+    let acceptBtn = '';
     if (g.auto_grade != null) {
       const attemptsInfo = g.auto_grade_attempts != null
         ? ' (с ' + g.auto_grade_attempts + '-й попытки)'
         : '';
       autoHtml = '<span style="color:#5b21b6;font-size:12px;margin-left:8px">' +
         '🤖 автооценка: ' + g.auto_grade + attemptsInfo + '</span>';
+
+      if (g.grade == null) {
+        acceptBtn = '<button class="btn-accept" onclick="acceptAuto()">' +
+          '✅ Принять ' + g.auto_grade + '</button>';
+      }
+    }
+
+    // ---- ИИ-отчёт ----
+    const aiScore = it.ai_score || 0;
+    let aiReasons = [];
+    if (Array.isArray(it.ai_reasons)) {
+      aiReasons = it.ai_reasons;
+    } else if (typeof it.ai_reasons === 'string') {
+      try { aiReasons = JSON.parse(it.ai_reasons); } catch (e) { aiReasons = []; }
+    }
+
+    let aiReportHtml = '';
+    if (aiScore >= 6) {
+      aiReportHtml =
+        '<div class="ai-report">' +
+          '<h4>🚨 Подозрение на ИИ <span class="score">score: ' + aiScore + '</span></h4>' +
+          '<div style="color:#991b1b;font-size:12.5px;margin-bottom:6px">' +
+            'Код имеет характерные признаки сгенерированного. Проверьте вручную.' +
+          '</div>' +
+          (aiReasons.length
+            ? '<ul>' + aiReasons.map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>'
+            : '') +
+        '</div>';
+    } else if (aiScore >= 3) {
+      aiReportHtml =
+        '<div class="ai-report warn">' +
+          '<h4>⚠ Возможные признаки ИИ <span class="score">score: ' + aiScore + '</span></h4>' +
+          (aiReasons.length
+            ? '<ul>' + aiReasons.map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>'
+            : '') +
+        '</div>';
+    } else {
+      aiReportHtml =
+        '<div class="ai-report ok">' +
+          '<h4>✅ Признаков ИИ не найдено <span class="score">score: ' + aiScore + '</span></h4>' +
+        '</div>';
     }
 
     document.getElementById('modalBody').innerHTML =
@@ -629,9 +888,17 @@
             esc(g.comment || '') + '">' +
           '<button class="btn-save-grade" onclick="saveGrade()">Сохранить</button>' +
           '<button class="btn-del-grade" onclick="removeGrade()">Сбросить</button>' +
+          acceptBtn +
           '<span class="grade-saved" id="gradeSaved"></span>' +
         '</div>' +
-      '</div>';
+        '<div class="quick-grade-row">' +
+          '<button class="btn-quick-modal g5" onclick="saveGradeValue(5)">🎓 5</button>' +
+          '<button class="btn-quick-modal g4" onclick="saveGradeValue(4)">🎓 4</button>' +
+          '<button class="btn-quick-modal g3" onclick="saveGradeValue(3)">🎓 3</button>' +
+          '<button class="btn-quick-modal g2" onclick="saveGradeValue(2)">🎓 2</button>' +
+          '<span class="kbd-hint">Клавиши 2-5 — быстро выставить · Esc — закрыть</span>' +
+        '</div>' +
+      '</div>' + aiReportHtml;
 
     document.getElementById('modalBg').classList.add('show');
   }
@@ -654,7 +921,7 @@
         })
       });
       const data = await safeJson(res);
-      if (data.error) { alert('Ошибка: ' + data.error); return; }
+      if (data.error) { toast('Ошибка: ' + data.error, 'err'); return; }
 
       await refreshGrades();
       const el = document.getElementById('gradeSaved');
@@ -664,8 +931,56 @@
       }
       render();
     } catch (e) {
-      alert('Ошибка: ' + e.message);
+      toast('Ошибка: ' + e.message, 'err');
     }
+  }
+
+  // ---- Быстрое сохранение конкретного значения (кнопки/клавиши) ----
+  async function saveGradeValue(value) {
+    const it = currentModalItem;
+    if (!it) return;
+    const comment = (document.getElementById('gradeComment') || {}).value || '';
+
+    try {
+      const res = await fetch('/api/grade', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          student: it.student,
+          task_id: it.task_id,
+          grade: value,
+          comment: comment,
+        })
+      });
+      const data = await safeJson(res);
+      if (data.error) { toast('Ошибка: ' + data.error, 'err'); return; }
+
+      const key = it.student + '::' + it.task_id;
+      gradesMap[key] = Object.assign({}, gradesMap[key] || {}, { grade: value });
+
+      // Обновляем селект в модалке
+      const sel = document.getElementById('gradeSelect');
+      if (sel) sel.value = String(value);
+
+      const el = document.getElementById('gradeSaved');
+      if (el) {
+        el.textContent = '✓ ' + value + ' сохранено';
+        setTimeout(() => { if (el) el.textContent = ''; }, 2000);
+      }
+      render();
+      toast('✓ Оценка ' + value + ' — ' + it.student, 'ok');
+    } catch (e) {
+      toast('Ошибка: ' + e.message, 'err');
+    }
+  }
+
+  // ---- Принять автооценку из модалки ----
+  async function acceptAuto() {
+    const it = currentModalItem;
+    if (!it) return;
+    const g = gradesMap[it.student + '::' + it.task_id] || {};
+    if (g.auto_grade == null) return;
+    await saveGradeValue(g.auto_grade);
   }
 
   async function removeGrade() {
@@ -679,7 +994,7 @@
         body: JSON.stringify({ student: it.student, task_id: it.task_id })
       });
       const data = await safeJson(res);
-      if (data.error) { alert('Ошибка: ' + data.error); return; }
+      if (data.error) { toast('Ошибка: ' + data.error, 'err'); return; }
 
       await refreshGrades();
       const el = document.getElementById('gradeSaved');
@@ -688,13 +1003,34 @@
         setTimeout(() => { if (el) el.textContent = ''; }, 2500);
       }
       render();
-    } catch (e) { alert('Ошибка: ' + e.message); }
+    } catch (e) { toast('Ошибка: ' + e.message, 'err'); }
   }
 
   function closeModal(e) {
     document.getElementById('modalBg').classList.remove('show');
     currentModalItem = null;
   }
+
+  // ---- Горячие клавиши в модалке ----
+  document.addEventListener('keydown', (e) => {
+    const modalOpen = document.getElementById('modalBg').classList.contains('show');
+    if (!modalOpen) return;
+
+    // Пропускаем, если фокус в input/textarea
+    const tag = (document.activeElement && document.activeElement.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+      if (e.key === 'Escape') {
+        closeModal();
+      }
+      return;
+    }
+
+    if (e.key === '5') { e.preventDefault(); saveGradeValue(5); }
+    else if (e.key === '4') { e.preventDefault(); saveGradeValue(4); }
+    else if (e.key === '3') { e.preventDefault(); saveGradeValue(3); }
+    else if (e.key === '2') { e.preventDefault(); saveGradeValue(2); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeModal(); }
+  });
 
   async function recalcAutoGrades() {
     if (!confirm('Пересчитать ВСЕ автооценки?\n\n' +
@@ -703,19 +1039,33 @@
     try {
       const res = await fetch('/api/recalc-grades', { method: 'POST' });
       const data = await safeJson(res);
-      if (data.error) { alert('Ошибка: ' + data.error); return; }
-      alert('✅ Пересчитано записей: ' + (data.updated || 0) +
-            '\nПропущено (ручная оценка): ' + (data.skipped_manual || 0));
+      if (data.error) { toast('Ошибка: ' + data.error, 'err'); return; }
+      toast('✅ Пересчитано: ' + (data.updated || 0) +
+            ' · пропущено: ' + (data.skipped_manual || 0), 'ok');
       await reload();
-    } catch (e) { alert('Ошибка: ' + e.message); }
+    } catch (e) { toast('Ошибка: ' + e.message, 'err'); }
+  }
+
+  async function checkAllAI() {
+    if (!confirm('Проверить ВСЕ решения на признаки ИИ?\n\n' +
+                 'Это может занять 10-30 секунд.')) return;
+    try {
+      const res = await fetch('/api/ai-check', { method: 'POST' });
+      const data = await safeJson(res);
+      if (data.error) { toast('Ошибка: ' + data.error, 'err'); return; }
+      toast('✅ Обработано: ' + (data.updated || 0) +
+            ' · ИИ: ' + (data.flagged || 0), 'ok');
+      await reload();
+    } catch (e) { toast('Ошибка: ' + e.message, 'err'); }
   }
 
   async function doBackup() {
     try {
       const res = await fetch('/api/backup', { method: 'POST' });
       const r = await safeJson(res);
-      alert(r.ok ? 'Копия сохранена:\n' + r.path : (r.error || 'Ошибка'));
-    } catch (e) { alert('Ошибка: ' + e.message); }
+      toast(r.ok ? 'Копия: ' + r.path : (r.error || 'Ошибка'),
+            r.ok ? 'ok' : 'err');
+    } catch (e) { toast('Ошибка: ' + e.message, 'err'); }
   }
 
   // ============================================================
@@ -873,20 +1223,19 @@
       const data = await safeJson(res);
 
       if (data.error) {
-        alert('Ошибка: ' + data.error);
+        toast('Ошибка: ' + data.error, 'err');
         return;
       }
 
       if (data.ok) {
         const r = data.result || {};
-        alert('✅ IP ' + ip + ' разблокирован\n\n' +
-              'Снято rate-limit: ' + (r.cleared_rate || 0) + '\n' +
-              'Снято записей имён: ' + (r.cleared_name || 0) + '\n' +
-              'Удалено событий: ' + (r.cleared_suspicious || 0));
+        toast('✅ IP ' + ip + ' разблокирован · снято ' +
+              ((r.cleared_rate || 0) + (r.cleared_name || 0) +
+               (r.cleared_suspicious || 0)), 'ok');
         loadSuspicious();
       }
     } catch (e) {
-      alert('Ошибка: ' + e.message);
+      toast('Ошибка: ' + e.message, 'err');
     }
   }
 
@@ -896,10 +1245,10 @@
     try {
       const res = await fetch('/api/suspicious', { method: 'DELETE' });
       const data = await safeJson(res);
-      if (data.error) { alert('Ошибка: ' + data.error); return; }
+      if (data.error) { toast('Ошибка: ' + data.error, 'err'); return; }
       loadSuspicious();
     } catch (e) {
-      alert('Ошибка: ' + e.message);
+      toast('Ошибка: ' + e.message, 'err');
     }
   }
 

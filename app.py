@@ -6,6 +6,7 @@
 # Сессия: ключ из .secret_key, cookie HttpOnly + SameSite=Lax.
 # Логи:   отключены (werkzeug, flask).
 # Автооценка: по проценту тестов + количество попыток.
+# ИИ-детектор: эвристика на признаки сгенерированного кода.
 # ============================================================
 import csv
 import io
@@ -26,11 +27,12 @@ from db import (
     init_db, load_submissions, add_submission, delete_submission,
     load_attempts, add_attempt, count_attempts,
     load_grades, save_grade, delete_grade,
-    get_stats, auto_grade, backup_db,
+    get_stats, auto_grade, backup_db, update_ai_report,
 )
 from executor import (
     run_code, detect_dotnet, find_python, prepare_csharp_template,
 )
+from ai_detect import analyze_to_json as ai_analyze
 from security import (
     check_rate_limit, check_min_interval,
     check_code_size, check_blacklist, log_suspicious_code,
@@ -47,7 +49,7 @@ from security import (
 
 
 HERE = Path(__file__).parent
-ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "Kexibqltym15w")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "teacher2026")
 
 
 # ============================================================
@@ -388,11 +390,20 @@ def api_run():
 
     if (not result.get("error") and result.get("total", 0) > 0
             and result.get("passed") == result.get("total")):
+        # Анализ на признаки ИИ
+        try:
+            ai_score, ai_reasons = ai_analyze(code, language, task)
+        except Exception as e:
+            print(f"[ai_detect] Ошибка: {e}", flush=True)
+            ai_score, ai_reasons = 0, "[]"
+
         add_submission(
             student=student, group_name=group_name,
             task_id=task_id, language=language, code=code,
             passed=result["passed"], total=result["total"],
             tests=result["tests"],
+            ai_score=ai_score,
+            ai_reasons=ai_reasons,
         )
 
         # Автооценка ставится ТОЛЬКО один раз — при первом успешном
@@ -482,6 +493,29 @@ def api_delete_grade():
     delete_grade(data.get("student", ""), data.get("task_id", ""))
     return jsonify({"ok": True})
 
+@app.route("/api/accept-auto-grades", methods=["POST"])
+@admin_required
+def api_accept_auto_grades():
+    """Принять автооценки как ручные для всех решений,
+    где ручная оценка ещё не стоит, а автооценка есть."""
+    accepted = 0
+    skipped = 0
+    for g in load_grades():
+        if g.get("grade") is not None:
+            skipped += 1
+            continue
+        ag = g.get("auto_grade")
+        if ag is None:
+            skipped += 1
+            continue
+        save_grade(
+            g["student"], g["task_id"],
+            grade=int(ag),
+            comment=g.get("comment", ""),
+            teacher=g.get("teacher", ""),
+        )
+        accepted += 1
+    return jsonify({"ok": True, "accepted": accepted, "skipped": skipped})
 
 @app.route("/api/recalc-grades", methods=["POST"])
 @admin_required
@@ -517,6 +551,52 @@ def api_recalc_grades():
         updated += 1
 
     return jsonify({"ok": True, "updated": updated, "skipped_manual": skipped})
+
+
+# ============================================================
+# API — проверка ИИ на всех решениях
+# ============================================================
+@app.route("/api/ai-check", methods=["POST"])
+@admin_required
+def api_ai_check():
+    """Пересчитать ИИ-детектор для всех существующих решений."""
+    tasks_map = {t["id"]: t for t in TASKS}
+
+    updated = 0
+    flagged = 0
+    skipped = 0
+    errors = 0
+
+    for s in load_submissions():
+        student = s["student"]
+        task_id = s["task_id"]
+        language = s["language"]
+        code = s.get("code", "")
+
+        task = tasks_map.get(task_id)
+        if not task:
+            skipped += 1
+            continue
+
+        try:
+            score, reasons = ai_analyze(code, language, task)
+        except Exception as e:
+            print(f"[ai-check] {student} · {task_id}: {e}", flush=True)
+            errors += 1
+            continue
+
+        update_ai_report(student, task_id, language, score, reasons)
+        updated += 1
+        if score >= 6:
+            flagged += 1
+
+    return jsonify({
+        "ok": True,
+        "updated": updated,
+        "flagged": flagged,
+        "skipped": skipped,
+        "errors": errors,
+    })
 
 
 @app.route("/api/stats")
@@ -585,9 +665,16 @@ def api_export_csv():
     writer.writerow(["Студент", "Группа", "Задача", "Язык",
                      "Пройдено", "Всего", "Время",
                      "Оценка", "Автооценка", "Попыток",
+                     "ИИ-score", "ИИ-причины",
                      "Комментарий", "Код"])
     for it in items:
         g = grades_map.get((it["student"], it["task_id"])) or {}
+        ai_score = it.get("ai_score", 0)
+        ai_reasons = it.get("ai_reasons", [])
+        if isinstance(ai_reasons, list):
+            ai_reasons_str = " | ".join(str(x) for x in ai_reasons)
+        else:
+            ai_reasons_str = str(ai_reasons or "")
         writer.writerow([
             it.get("student", ""), it.get("group_name", ""),
             titles.get(it.get("task_id"), it.get("task_id", "")),
@@ -595,6 +682,7 @@ def api_export_csv():
             it.get("timestamp", ""),
             g.get("grade", ""), g.get("auto_grade", ""),
             g.get("auto_grade_attempts", ""),
+            ai_score, ai_reasons_str,
             g.get("comment", ""),
             (it.get("code") or "").replace("\r", ""),
         ])
@@ -644,13 +732,23 @@ def too_large(e):
 
 @app.errorhandler(500)
 def err500(e):
-    return jsonify({"error": str(e)}), 500
+    import traceback as _tb
+    tb = _tb.format_exc()
+    print("[500] traceback:\n" + tb, flush=True)
+    return jsonify({"error": str(e), "traceback": tb}), 500
 
 
 # ============================================================
 # Инициализация
 # ============================================================
 def startup():
+    # Диагностика путей
+    try:
+        from db import print_paths
+        print_paths()
+    except Exception as e:
+        print(f"[startup] print_paths недоступен: {e}")
+
     init_db()
     prepare_csharp_template()
 
@@ -677,6 +775,8 @@ if __name__ == "__main__":
     if dn:
         print(f"[CS] .NET:   {dn['exe']} ({dn['framework']})")
     print(f"\n[>>] Студенты: http://{local_ip}:{PORT}")
+    print(f"[TT] Учитель:  http://{local_ip}:{PORT}/admin")
+    print(f"[PW] Пароль:   {ADMIN_PASSWORD}")
     print(f"[TK] Задач:    {len(TASKS)}\n")
 
     app.run(host=HOST, port=PORT, debug=False, threaded=True)

@@ -1,14 +1,40 @@
 # ============================================================
 # Хранилище на SQLite: submissions / attempts / grades
-# Автооценка учитывает и процент тестов, и количество попыток
+# Работает и как обычный скрипт, и как скомпилированный .exe
+# (PyInstaller). БД всегда лежит рядом с .exe / .py.
+# Автооценка: по проценту тестов + количество попыток.
+# ИИ-детектор: ai_score + ai_reasons в submissions.
 # ============================================================
 import json
+import os
 import sqlite3
+import sys
 import threading
 import time
 from pathlib import Path
 
-DB_FILE = Path(__file__).parent / "data.db"
+
+# ============================================================
+# Определение папки приложения
+# ============================================================
+def get_app_dir() -> Path:
+    """Возвращает папку, где хранится БД и рабочие файлы.
+
+    - Обычный запуск скрипта:   папка с .py файлами
+    - Скомпилированный .exe:    папка, где лежит .exe
+
+    В обоих случаях файл data.db будет рядом с исполняемым
+    файлом, а не во временной папке PyInstaller (_MEIPASS).
+    """
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).parent
+    return Path(__file__).parent
+
+
+APP_DIR = get_app_dir()
+DB_FILE = APP_DIR / "data.db"
+BACKUPS_DIR = APP_DIR / "backups"
+
 _lock = threading.Lock()
 
 
@@ -66,7 +92,7 @@ def init_db():
                 ON submissions(student);
         """)
 
-        # ---- Миграция: auto_grade_attempts в существующие БД ----
+        # ---- Миграция: auto_grade_attempts ----
         try:
             cols = [r[1] for r in c.execute("PRAGMA table_info(grades)").fetchall()]
             if "auto_grade_attempts" not in cols:
@@ -74,6 +100,18 @@ def init_db():
                 print("[db] Добавлено поле auto_grade_attempts", flush=True)
         except Exception as e:
             print(f"[db] Миграция auto_grade_attempts: {e}", flush=True)
+
+        # ---- Миграция: ИИ-детектор для submissions ----
+        try:
+            cols = [r[1] for r in c.execute("PRAGMA table_info(submissions)").fetchall()]
+            if "ai_score" not in cols:
+                c.execute("ALTER TABLE submissions ADD COLUMN ai_score INTEGER DEFAULT 0")
+                print("[db] Добавлено поле ai_score", flush=True)
+            if "ai_reasons" not in cols:
+                c.execute("ALTER TABLE submissions ADD COLUMN ai_reasons TEXT DEFAULT '[]'")
+                print("[db] Добавлено поле ai_reasons", flush=True)
+        except Exception as e:
+            print(f"[db] Миграция ai_score: {e}", flush=True)
 
         c.commit()
         c.close()
@@ -98,16 +136,36 @@ def load_submissions():
             d["tests"] = json.loads(d.pop("tests_json") or "[]")
         except Exception:
             d["tests"] = []
+        # ai_reasons — тоже JSON
+        try:
+            d["ai_reasons"] = json.loads(d.get("ai_reasons") or "[]")
+        except Exception:
+            d["ai_reasons"] = []
+        # ai_score — гарантированно число
+        try:
+            d["ai_score"] = int(d.get("ai_score") or 0)
+        except Exception:
+            d["ai_score"] = 0
         items.append(d)
     return items
 
 
-def add_submission(student, group_name, task_id, language, code, passed, total, tests):
+def add_submission(student, group_name, task_id, language, code, passed, total, tests,
+                   ai_score=None, ai_reasons=None):
     with _lock:
         c = _conn()
         now = time.strftime("%Y-%m-%d %H:%M:%S")
         tj = json.dumps([{"name": t["name"], "passed": t["passed"]} for t in tests],
                         ensure_ascii=False)
+
+        if ai_score is None:
+            ai_score = 0
+        if ai_reasons is None:
+            ai_reasons = "[]"
+        # Если пришёл список — преобразуем в JSON
+        if isinstance(ai_reasons, list):
+            ai_reasons = json.dumps(ai_reasons, ensure_ascii=False)
+
         old = c.execute(
             "SELECT passed FROM submissions WHERE student=? AND task_id=? AND language=?",
             (student, task_id, language)
@@ -115,18 +173,22 @@ def add_submission(student, group_name, task_id, language, code, passed, total, 
         if old and old["passed"] > passed:
             c.close()
             return
+
         c.execute("""
             INSERT INTO submissions (student, group_name, task_id, language,
-                code, passed, total, timestamp, tests_json)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                code, passed, total, timestamp, tests_json, ai_score, ai_reasons)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(student, task_id, language) DO UPDATE SET
                 code=excluded.code,
                 passed=excluded.passed,
                 total=excluded.total,
                 timestamp=excluded.timestamp,
                 tests_json=excluded.tests_json,
-                group_name=excluded.group_name
-        """, (student, group_name, task_id, language, code, passed, total, now, tj))
+                group_name=excluded.group_name,
+                ai_score=excluded.ai_score,
+                ai_reasons=excluded.ai_reasons
+        """, (student, group_name, task_id, language, code, passed, total,
+              now, tj, int(ai_score), ai_reasons))
         c.commit()
         c.close()
 
@@ -136,6 +198,21 @@ def delete_submission(student, task_id, language):
         c = _conn()
         c.execute("DELETE FROM submissions WHERE student=? AND task_id=? AND language=?",
                   (student, task_id, language))
+        c.commit()
+        c.close()
+
+
+def update_ai_report(student, task_id, language, ai_score, ai_reasons):
+    """Обновляет поля ai_score и ai_reasons для существующей записи."""
+    if isinstance(ai_reasons, list):
+        ai_reasons = json.dumps(ai_reasons, ensure_ascii=False)
+    with _lock:
+        c = _conn()
+        c.execute("""
+            UPDATE submissions
+            SET ai_score=?, ai_reasons=?
+            WHERE student=? AND task_id=? AND language=?
+        """, (int(ai_score), ai_reasons, student, task_id, language))
         c.commit()
         c.close()
 
@@ -334,12 +411,36 @@ def backup_db():
     import shutil
     if not DB_FILE.exists():
         return None
-    bdir = Path(__file__).parent / "backups"
-    bdir.mkdir(exist_ok=True)
+    BACKUPS_DIR.mkdir(exist_ok=True)
     stamp = time.strftime("%Y-%m-%d_%H-%M-%S")
-    dst = bdir / f"data_{stamp}.db"
+    dst = BACKUPS_DIR / f"data_{stamp}.db"
     shutil.copy2(DB_FILE, dst)
-    files = sorted(bdir.glob("data_*.db"))
+    files = sorted(BACKUPS_DIR.glob("data_*.db"))
     for old in files[:-30]:
         old.unlink()
     return str(dst)
+
+
+# ============================================================
+# Информация о путях (для диагностики)
+# ============================================================
+def print_paths():
+    """Вывести, где ищется БД. Полезно при отладке .exe."""
+    print(f"[db] APP_DIR:    {APP_DIR}")
+    print(f"[db] DB_FILE:    {DB_FILE}")
+    print(f"[db] BACKUPS:    {BACKUPS_DIR}")
+    print(f"[db] frozen:     {getattr(sys, 'frozen', False)}")
+    print(f"[db] executable: {sys.executable}")
+    print(f"[db] DB exists:  {DB_FILE.exists()}")
+    if DB_FILE.exists():
+        try:
+            c = sqlite3.connect(str(DB_FILE))
+            subs = c.execute("SELECT COUNT(*) FROM submissions").fetchone()[0]
+            atts = c.execute("SELECT COUNT(*) FROM attempts").fetchone()[0]
+            grds = c.execute("SELECT COUNT(*) FROM grades").fetchone()[0]
+            c.close()
+            print(f"[db] submissions: {subs}")
+            print(f"[db] attempts:    {atts}")
+            print(f"[db] grades:      {grds}")
+        except Exception as e:
+            print(f"[db] Ошибка чтения: {e}")
